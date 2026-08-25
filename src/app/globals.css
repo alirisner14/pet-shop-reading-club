@@ -1,0 +1,219 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------
+   Theme colors. Change these here and the whole game updates.
+   ------------------------------------------------------------ */
+@theme {
+  --color-cream:     #FFF6E9;
+  --color-peach:     #FFD9B8;
+  --color-rose:      #F49AC1;
+  --color-lavender:  #A98BD8;
+  --color-sky:       #A8D8F0;
+  --color-mint:      #7DD8A0;
+  --color-ink:       #5B4A66;
+  --color-sunshine:  #F5C842;
+  --color-grape:     #8E6BC4;
+}
+
+/* ------------------------------------------------------------
+   Base
+   ------------------------------------------------------------ */
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-cream);
+  color: var(--color-ink);
+  font-family: var(--font-display), system-ui, sans-serif;
+  overscroll-behavior: none;
+}
+
+/* Kids tap fast and repeatedly. Stop iPad from zooming, selecting
+   text, or flashing a gray box on every tap. */
+button,
+img {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+button {
+  touch-action: manipulation;
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------
+   Animations
+   ------------------------------------------------------------ */
+@keyframes pop-in {
+  0%   { transform: scale(0.7); opacity: 0; }
+  70%  { transform: scale(1.06); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes gentle-bob {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-8px); }
+}
+
+/* Each letter drops in and settles — used on the target word. */
+@keyframes letter-drop {
+  0%   { transform: translateY(-40px) scale(0.6); opacity: 0; }
+  60%  { transform: translateY(4px)   scale(1.08); opacity: 1; }
+  100% { transform: translateY(0)     scale(1);    opacity: 1; }
+}
+
+/* Answer tiles rise into place. */
+@keyframes tile-rise {
+  0%   { transform: translateY(28px); opacity: 0; }
+  100% { transform: translateY(0);    opacity: 1; }
+}
+
+/* A happy little shake for a correct answer. */
+@keyframes cheer {
+  0%, 100% { transform: rotate(0deg)   scale(1); }
+  25%      { transform: rotate(-3deg)  scale(1.06); }
+  75%      { transform: rotate(3deg)   scale(1.06); }
+}
+
+/* Host sliding up from the bottom edge. */
+@keyframes rise-up {
+  0%   { transform: translateY(60%); opacity: 0; }
+  100% { transform: translateY(0);   opacity: 1; }
+}
+
+.animate-pop-in     { animation: pop-in 0.6s ease-out both; }
+.animate-bob        { animation: gentle-bob 3.2s ease-in-out infinite; }
+.animate-letter     { animation: letter-drop 0.8s cubic-bezier(.34,1.56,.64,1) both; }
+.animate-tile       { animation: tile-rise 0.7s ease-out both; }
+.animate-cheer      { animation: cheer 0.9s ease-in-out; }
+.animate-rise-up    { animation: rise-up 0.8s cubic-bezier(.34,1.56,.64,1) both; }
+
+/* Respect a child's device setting if motion makes them uncomfortable. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-pop-in,
+  .animate-bob,
+  .animate-letter,
+  .animate-tile,
+  .animate-cheer,
+  .animate-rise-up {
+    animation: none;
+  }
+}
+
+/* ------------------------------------------------------------
+   Playful extras
+   ------------------------------------------------------------ */
+
+/* A quick two-stage hop — one end lifts, then the other. */
+@keyframes tile-hop {
+  0%   { transform: rotate(0deg)   translateY(0); }
+  30%  { transform: rotate(-2.5deg) translateY(-6px); }
+  60%  { transform: rotate(2.5deg)  translateY(-3px); }
+  100% { transform: rotate(0deg)   translateY(0); }
+}
+
+.hover-hop:hover {
+  animation: tile-hop 0.55s ease-in-out;
+}
+
+/* A tile bursting apart when it's matched. */
+@keyframes tile-burst {
+  0%   { transform: scale(1);    opacity: 1; }
+  40%  { transform: scale(1.18); opacity: 1; }
+  100% { transform: scale(0.4);  opacity: 0; }
+}
+
+.animate-burst {
+  animation: tile-burst 0.45s ease-in both;
+}
+
+/* Breathing. Scales very slightly from the feet, so a character whose
+   legs run off the bottom of the screen still looks planted. A vertical
+   translate (the old bob) made her look like she was hovering. */
+@keyframes breathe {
+  0%, 100% { transform: scale(1, 1); }
+  50%      { transform: scale(0.994, 1.012); }
+}
+
+.animate-breathe {
+  animation: breathe 3.6s ease-in-out infinite;
+  transform-origin: bottom center;
+}
+
+/* A hard "no, not that one" shake. */
+@keyframes shake {
+  0%, 100% { transform: translateX(0) rotate(0deg); }
+  12%      { transform: translateX(-12px) rotate(-4deg); }
+  28%      { transform: translateX(11px)  rotate(4deg); }
+  44%      { transform: translateX(-9px)  rotate(-3deg); }
+  60%      { transform: translateX(7px)   rotate(2.5deg); }
+  78%      { transform: translateX(-4px)  rotate(-1.5deg); }
+}
+
+.animate-shake {
+  animation: shake 0.6s ease-in-out;
+}
+
+/* Confetti. Each piece gets its own direction and spin via CSS vars. */
+@keyframes confetti-fly {
+  0% {
+    transform: translate(0, 0) rotate(0deg) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(var(--dx), var(--dy)) rotate(var(--rot)) scale(0.6);
+    opacity: 0;
+  }
+}
+
+.confetti-piece {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  animation: confetti-fly var(--dur, 1s) cubic-bezier(.2,.6,.4,1) forwards;
+}
+
+/* Engraved lettering — light below, shadow above. */
+.text-engraved {
+  text-shadow:
+    0 2px 0 rgba(255, 255, 255, 0.75),
+    0 -1px 2px rgba(0, 0, 0, 0.28);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hover-hop:hover,
+  .animate-burst,
+  .animate-shake,
+  .animate-breathe,
+  .confetti-piece {
+    animation: none;
+  }
+}
+
+
+/* ------------------------------------------------------------
+   Gameplay fonts
+
+   .font-display  Daisy Bouquet — heavy and round. Only for text that
+                  can be large, where the thick strokes have room to
+                  breathe and the letter holes stay open.
+
+   .font-game     Melody — light and handwritten. Everything else:
+                  word tiles, instructions, speech bubbles, buttons.
+
+   The weight contrast between the two is the point.
+   ------------------------------------------------------------ */
+.font-display {
+  font-family: var(--font-display), system-ui, sans-serif;
+}
+
+/* Melody is narrow and tightly spaced by default, so it gets a little
+   air between letters everywhere it's used. */
+.font-game {
+  font-family: var(--font-game), system-ui, sans-serif;
+  letter-spacing: 3.5px;
+}
