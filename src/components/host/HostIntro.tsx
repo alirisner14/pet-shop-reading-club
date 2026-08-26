@@ -10,9 +10,11 @@ import type { HostChoice } from '@/types';
 // The host's spoken sequences — the first-time welcome, and each mini
 // game's instructions.
 //
-// Nothing plays on its own. The child taps the speaker when she's ready,
-// and steps forward with the arrows. Auto-play fought with the browser's
-// speech engine and the two drifted apart.
+// Nothing plays on its own; the child taps the speaker when she's ready.
+// The forward arrow is the only way to advance, and "Let's go!" stays
+// locked until the last line has actually finished playing — otherwise
+// it's simply the biggest, most tempting button on the screen and the
+// whole explanation gets skipped.
 
 export type Pose = 'neutral' | 'explaining' | 'excited' | 'thumbsup';
 
@@ -38,11 +40,9 @@ export type IntroStep = {
   flip?: boolean;
 };
 
-/** The welcome sequence. */
 export const WELCOME_STEPS: IntroStep[] = [
   { clip: 'intro-1', pose: 'neutral' },
   { clip: 'intro-2', pose: 'explaining' },
-  // Turned around, pointing back at the meter on the left.
   { clip: 'intro-3', pose: 'explaining', flip: true },
   { clip: 'intro-4', pose: 'explaining', flip: true },
   { clip: 'intro-5', pose: 'excited' },
@@ -50,7 +50,6 @@ export const WELCOME_STEPS: IntroStep[] = [
   { clip: 'intro-7', pose: 'thumbsup' },
 ];
 
-/** A one-line explanation, used for mini game instructions. */
 export function gameStep(clip: string): IntroStep[] {
   return [{ clip, pose: 'explaining' }];
 }
@@ -58,18 +57,64 @@ export function gameStep(clip: string): IntroStep[] {
 type Props = {
   host: HostChoice;
   steps: IntroStep[];
-  /** Kept for call-site clarity; the character is sized the same either way. */
+  /** Kept for call-site clarity; sizing is the same either way. */
   variant?: 'welcome' | 'game';
   onStep?: (index: number) => void;
-  /** Fires when the speaker is tapped, so cues can be timed to speech. */
   onSpeak?: (index: number) => void;
   onDone: () => void;
 };
 
+// ------------------------------------------------------------
+// Chunky arrow button
+// ------------------------------------------------------------
+function ArrowButton({
+  direction,
+  onClick,
+  disabled = false,
+  label,
+}: {
+  direction: 'left' | 'right';
+  onClick: () => void;
+  disabled?: boolean;
+  label: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      className="transition-transform active:scale-90 disabled:opacity-25"
+    >
+      <svg
+        width="74"
+        height="52"
+        viewBox="0 0 74 52"
+        style={{
+          transform: direction === 'left' ? 'scaleX(-1)' : undefined,
+          filter: 'drop-shadow(0 4px 5px rgba(0,0,0,0.3))',
+        }}
+      >
+        <path
+          d="M4 18 H42 V6 L70 26 L42 46 V34 H4 Z"
+          fill="#57A9F5"
+          stroke="#ffffff"
+          strokeWidth="4"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M8 21 H44"
+          stroke="rgba(255,255,255,0.55)"
+          strokeWidth="3"
+          strokeLinecap="round"
+        />
+      </svg>
+    </button>
+  );
+}
+
 export default function HostIntro({
   host,
   steps,
-  variant: _variant = 'welcome',
   onStep,
   onSpeak,
   onDone,
@@ -100,27 +145,25 @@ export default function HostIntro({
   function go(delta: number) {
     stopAll();
     const next = index + delta;
-    if (next < 0) return;
-    if (next >= steps.length) return onDone();
+    if (next < 0 || next >= steps.length) return;
     setIndex(next);
   }
 
   return (
     <div className="absolute inset-0 z-30">
-      {/* Character.
-          Fixed size and position throughout — the only thing that changes
-          between steps is which way she faces. Moving her around made her
-          appear to glide across the floor. */}
-      <div className="absolute bottom-0 left-[1%] h-[62%]">
-        <div className="animate-breathe relative h-full" style={{ aspectRatio: '3 / 5' }}>
+      {/* Character — sized by height, pinned to the bottom-left corner,
+          nudged down so her feet crop off the screen edge. */}
+      <div className="absolute bottom-0 left-0 h-[74%] w-[48%] translate-y-[7%]">
+        <div className="animate-breathe relative h-full w-full">
           <Image
             src={POSES[host][step.pose]}
             alt=""
             fill
-            sizes="(max-width: 768px) 50vw, 40vw"
+            sizes="(max-width: 768px) 60vw, 48vw"
             priority
-            className="object-contain object-bottom"
+            className="object-contain"
             style={{
+              objectPosition: 'left bottom',
               transform: step.flip ? 'scaleX(-1)' : undefined,
               transition: 'transform 400ms ease-out',
             }}
@@ -128,74 +171,54 @@ export default function HostIntro({
         </div>
       </div>
 
-      {/* Speech bubble */}
-      <div
-        className="animate-pop-in absolute left-[26%] top-[8%] max-w-2xl rounded-[2rem] border-8 border-white bg-white/95 px-10 py-8 shadow-2xl" 
-      >
-        <div className="flex items-start gap-5">
+      {/* Speech bubble — low and to her right, clear of the play area */}
+      <div className="absolute bottom-[4%] left-[33%] w-[30%] min-w-[380px] rounded-[1.75rem] border-4 border-white bg-white px-8 py-6 shadow-2xl">
+        <p
+          key={index}
+          className="font-game text-3xl leading-relaxed text-ink"
+        >
+          {caption}
+        </p>
+
+        {/* Controls */}
+        <div className="mt-5 flex items-center justify-between">
+          <ArrowButton
+            direction="left"
+            onClick={() => go(-1)}
+            disabled={index === 0}
+            label="Previous"
+          />
+
           <button
             onClick={speakLine}
             aria-label="Hear it"
-            className={`shrink-0 rounded-full border-4 border-white bg-sky px-5 py-4 text-4xl shadow-lg transition-transform active:scale-90 ${
-              speaking ? 'animate-bob' : 'animate-pop-in'
+            className={`text-5xl transition-transform active:scale-90 ${
+              speaking ? 'animate-breathe' : ''
             }`}
+            style={{ filter: 'drop-shadow(0 4px 5px rgba(0,0,0,0.28))' }}
           >
             🔊
           </button>
 
-          <p key={index} className="font-game text-4xl leading-relaxed text-ink">
-            {caption}
-          </p>
+          <ArrowButton
+            direction="right"
+            onClick={() => go(1)}
+            disabled={last}
+            label="Next"
+          />
         </div>
 
-        {/* Step arrows, inside the bubble */}
-        {steps.length > 1 && (
-          <div className="mt-5 flex items-center justify-between border-t-2 border-ink/10 pt-3">
-            <button
-              onClick={() => go(-1)}
-              disabled={index === 0}
-              aria-label="Previous"
-              className="rounded-full border-2 border-ink/15 px-4 py-1 text-2xl text-grape transition-transform active:scale-90 disabled:opacity-25"
-            >
-              ←
-            </button>
-
-            <span className="font-game text-2xl text-ink/40">
-              {index + 1} / {steps.length}
-            </span>
-
-            <button
-              onClick={() => go(1)}
-              disabled={last}
-              aria-label="Next"
-              className="rounded-full border-2 border-ink/15 px-4 py-1 text-2xl text-grape transition-transform active:scale-90 disabled:opacity-25"
-            >
-              →
-            </button>
-          </div>
-        )}
-
-        {/* tail */}
-        <div className="absolute -bottom-5 left-16 h-0 w-0 border-l-[24px] border-r-[24px] border-t-[28px] border-l-transparent border-r-transparent border-t-white" />
+        {/* tail, pointing back toward the character */}
+        <div className="absolute -left-4 bottom-10 h-0 w-0 border-b-[18px] border-r-[26px] border-t-[18px] border-b-transparent border-r-white border-t-transparent" />
       </div>
 
-      {/* Skip — a big arrow, bottom right */}
-      {!last && (
-        <button
-          onClick={onDone}
-          aria-label="Skip"
-          className="absolute bottom-8 right-8 flex h-20 w-20 items-center justify-center rounded-full border-4 border-white bg-white/80 text-5xl text-grape shadow-xl transition-transform active:scale-90"
-        >
-          ➤
-        </button>
-      )}
-
-      {/* Finish — grows and wiggles once she's done talking */}
+      {/* Finish — locked until the last line has actually been heard */}
       {last && (
         <button
           onClick={onDone}
-          className={`font-display absolute bottom-8 right-8 rounded-full border-[6px] border-white bg-mint px-16 py-7 text-5xl text-white shadow-2xl transition-transform duration-300 active:scale-95 ${
-            spoken ? 'hover-hop scale-110' : 'scale-100'
+          disabled={!spoken}
+          className={`font-display absolute bottom-8 right-8 rounded-full border-[6px] border-white bg-mint px-16 py-7 text-5xl text-white shadow-2xl transition-all duration-300 active:scale-95 ${
+            spoken ? 'hover-hop scale-110 opacity-100' : 'scale-95 opacity-30'
           }`}
           style={{
             boxShadow:

@@ -44,6 +44,13 @@ export const METER_TARGET = 10;
 /** Level from which an extra unmatchable tile is added to the board. */
 export const DISTRACTOR_FROM_LEVEL = 3;
 
+/** Pairs on the board in Match the Words — grows as she gets quicker. */
+export function pairsPerRound(level: number): number {
+  if (level <= 2) return 3;
+  if (level <= 5) return 4;
+  return 5;
+}
+
 // ------------------------------------------------------------
 // Which games are in play
 // ------------------------------------------------------------
@@ -248,10 +255,69 @@ export function nextWord(
   return any.length ? any[Math.floor(Math.random() * any.length)] : null;
 }
 
+// ------------------------------------------------------------
+// Confusable words
+// ------------------------------------------------------------
+
+/**
+ * How easily two words could be mistaken for each other.
+ *
+ * Pairing "red" against "because" teaches nothing — the answer is
+ * obvious from shape alone. Pairing it against "bed" forces her to
+ * actually look at the letters. Reversals (was/saw, on/no) score
+ * highest because those are the classic early-reader mix-ups.
+ */
+export function similarity(a: string, b: string): number {
+  if (a === b) return -1;
+
+  const x = a.toLowerCase();
+  const y = b.toLowerCase();
+  let score = 0;
+
+  if (x.length === y.length) score += 3;
+  if (x[0] === y[0]) score += 2;
+  if (x[x.length - 1] === y[y.length - 1]) score += 2;
+
+  // was / saw, on / no, tub / but
+  if (x === [...y].reverse().join('')) score += 6;
+
+  // Same letters, different order.
+  const sortLetters = (w: string) => [...w].sort().join('');
+  if (sortLetters(x) === sortLetters(y)) score += 5;
+
+  // One letter different in the same position — cat/cot, then/than.
+  if (x.length === y.length) {
+    let diff = 0;
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) diff++;
+    if (diff === 1) score += 4;
+    if (diff === 2) score += 2;
+  }
+
+  // Shared letters overall.
+  const shared = [...new Set(x)].filter((c) => y.includes(c)).length;
+  score += Math.min(3, shared);
+
+  return score;
+}
+
+/** The most easily-confused words for a target, hardest first. */
+export function confusableWords(
+  target: string,
+  pool: Word[],
+  count: number
+): Word[] {
+  return [...pool]
+    .filter((w) => w.word !== target)
+    .map((w) => ({ w, s: similarity(target, w.word) }))
+    .sort((a, b) => b.s - a.s)
+    .slice(0, count)
+    .map((x) => x.w);
+}
+
 /**
  * Extra words that pair with nothing, so the last tile on the board is
- * never guaranteed to be the right one. Guessing by elimination stops
- * paying off.
+ * never guaranteed to be the right one. Chosen to look like one of the
+ * real words rather than at random.
  */
 export function distractorWords(
   plan: LevelPlan,
@@ -261,8 +327,11 @@ export function distractorWords(
   if (plan.level < DISTRACTOR_FROM_LEVEL || count <= 0) return [];
 
   const pool = wordsUpToLevel(plan.level).filter((w) => !used.has(w.word));
-  const shuffled = [...pool].sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, count);
+  if (pool.length === 0) return [];
+
+  // Look like whichever word is already on the board.
+  const target = [...used][Math.floor(Math.random() * used.size)];
+  return confusableWords(target, pool, count);
 }
 
 // ------------------------------------------------------------

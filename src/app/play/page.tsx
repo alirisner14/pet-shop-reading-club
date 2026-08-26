@@ -7,33 +7,49 @@ import Image from 'next/image';
 import { createClient } from '@/lib/supabase/client';
 import MatchWords from '@/components/minigames/MatchWords';
 import MatchWordsDemo from '@/components/minigames/MatchWordsDemo';
+import MatchSpokenWord, {
+  type Question,
+} from '@/components/minigames/MatchSpokenWord';
 import RewardMeter from '@/components/game/RewardMeter';
+import Confetti from '@/components/game/Confetti';
 import HostIntro, { WELCOME_STEPS, gameStep } from '@/components/host/HostIntro';
 import HostReaction, { type Reaction } from '@/components/host/HostReaction';
 import HostAnimation from '@/components/host/HostAnimation';
 import Loading from '@/components/ui/Loading';
 import ExitModal from '@/components/ui/ExitModal';
-import Confetti from '@/components/game/Confetti';
 import {
   planLevel,
   levelStatus,
   nextWord,
   distractorWords,
+  confusableWords,
+  pairsPerRound,
   meterPercent,
   METER_TARGET,
   MASTERY_TARGET,
+  unlockedGames,
   type LevelPlan,
 } from '@/lib/progression';
-import { MAX_LEVEL } from '@/data/words';
+import { MAX_LEVEL, wordsUpToLevel } from '@/data/words';
 import { playHost } from '@/lib/audio';
-import type { Child, ChildWord } from '@/types';
+import type { Child, ChildWord, MiniGame } from '@/types';
 import type { Word } from '@/data/words';
 
 type Phase = 'welcome' | 'game-intro' | 'playing' | 'meter-full' | 'level-up';
 
 const METER_CUE_STEP = 2;
-const PAIRS_PER_ROUND = 3;
 const REACTION_EVERY = 3;
+const QUESTIONS_PER_ROUND = 3;
+
+// Which host clip explains each game.
+const INTRO_CLIP: Record<MiniGame, string> = {
+  match_words: 'game-match-words',
+  match_spoken_word: 'game-match-spoken',
+  match_picture: 'game-match-picture',
+  missing_letter: 'game-missing-letter',
+  snail_talk: 'game-snail-talk',
+  accessory_train: 'game-accessory-train',
+};
 
 export default function PlayPage() {
   const router = useRouter();
@@ -41,8 +57,14 @@ export default function PlayPage() {
 
   const [child, setChild] = useState<Child | null>(null);
   const [plan, setPlan] = useState<LevelPlan | null>(null);
+  const [game, setGame] = useState<MiniGame>('match_words');
+
+  // Match the Words
   const [round, setRound] = useState<Word[]>([]);
   const [extras, setExtras] = useState<Word[]>([]);
+  // Match to Spoken Word
+  const [questions, setQuestions] = useState<Question[]>([]);
+
   const [correctCount, setCorrectCount] = useState(0);
   const [streak, setStreak] = useState(0);
   const [reaction, setReaction] = useState<Reaction | null>(null);
@@ -54,13 +76,18 @@ export default function PlayPage() {
 
   const loaded = useRef(false);
   const progressRef = useRef<ChildWord[]>([]);
+  const gameIndex = useRef(0);
 
-  /** Builds the next set of pairs, plus any unmatchable extras. */
-  const buildRound = useCallback((p: LevelPlan) => {
+  // ---------------------------------------------------------
+  // Building a round
+  // ---------------------------------------------------------
+
+  /** Match the Words: N pairs plus one lookalike that matches nothing. */
+  const buildMatchWords = useCallback((p: LevelPlan) => {
     const chosen: Word[] = [];
     const used = new Set<string>();
 
-    for (let i = 0; i < PAIRS_PER_ROUND; i++) {
+    for (let i = 0; i < pairsPerRound(p.level); i++) {
       const w = nextWord(p, 'match_words', progressRef.current, used);
       if (!w) break;
       used.add(w.word);
@@ -70,6 +97,47 @@ export default function PlayPage() {
     setRound(chosen);
     setExtras(distractorWords(p, used, 1));
   }, []);
+
+  /** Match to Spoken Word: a few questions, each with lookalike choices. */
+  const buildSpokenWord = useCallback((p: LevelPlan) => {
+    const pool = wordsUpToLevel(p.level);
+    const qs: Question[] = [];
+    const used = new Set<string>();
+
+    for (let i = 0; i < QUESTIONS_PER_ROUND; i++) {
+      const target = nextWord(p, 'match_spoken_word', progressRef.current, used);
+      if (!target) break;
+      used.add(target.word);
+
+      // Choices that actually look like the answer.
+      const choices = confusableWords(target.word, pool, 3);
+      qs.push({ target, choices });
+    }
+
+    setQuestions(qs);
+  }, []);
+
+  /** Picks the next game and lays out its round. */
+  const startRound = useCallback(
+    (p: LevelPlan, kid: Child) => {
+      const games = unlockedGames(p.level);
+      const next = games[gameIndex.current % games.length];
+      gameIndex.current += 1;
+
+      setGame(next);
+
+      if (next === 'match_spoken_word') buildSpokenWord(p);
+      else buildMatchWords(p);
+
+      // Explain it the first time she meets it.
+      if (!kid.seen_intros.includes(next)) {
+        setPhase('game-intro');
+      } else {
+        setPhase('playing');
+      }
+    },
+    [buildMatchWords, buildSpokenWord]
+  );
 
   // ---------------------------------------------------------
   // Load
@@ -100,25 +168,22 @@ export default function PlayPage() {
 
       setChild(kid);
       setPlan(p);
-      buildRound(p);
 
-      const seenWelcome = kid.seen_intros.includes('welcome');
-      const seenGame = kid.seen_intros.includes('match_words');
-
-      if (!seenWelcome) setPhase('welcome');
-      else if (!seenGame) {
-        setPhase('game-intro');
-        setMeterVisible(true);
+      if (!kid.seen_intros.includes('welcome')) {
+        // Lay out a round behind the welcome, but don't show it yet.
+        buildMatchWords(p);
+        setGame('match_words');
+        setPhase('welcome');
       } else {
-        setPhase('playing');
         setMeterVisible(true);
+        startRound(p, kid);
       }
 
       setLoading(false);
     }
 
     load();
-  }, [router, supabase, buildRound]);
+  }, [router, supabase, buildMatchWords, startRound]);
 
   useEffect(() => {
     if (!reaction) return;
@@ -130,38 +195,34 @@ export default function PlayPage() {
   // Intro bookkeeping
   // ---------------------------------------------------------
   const markSeen = useCallback(
-    async (key: string) => {
-      if (!child || child.seen_intros.includes(key)) return;
+    async (key: string): Promise<Child | null> => {
+      if (!child || child.seen_intros.includes(key)) return child;
       const seen = [...child.seen_intros, key];
-      setChild({ ...child, seen_intros: seen });
+      const updated = { ...child, seen_intros: seen };
+      setChild(updated);
       await supabase
         .from('children')
         .update({ seen_intros: seen })
         .eq('id', child.id);
+      return updated;
     },
     [child, supabase]
   );
 
   async function finishWelcome() {
-    await markSeen('welcome');
+    const kid = await markSeen('welcome');
     setDemoMeter(null);
     setMeterVisible(true);
-    setPhase(
-      child?.seen_intros.includes('match_words') ? 'playing' : 'game-intro'
-    );
+    if (kid && plan) startRound(plan, kid);
   }
 
   async function finishGameIntro() {
-    await markSeen('match_words');
+    await markSeen(game);
     setPhase('playing');
   }
 
   // ---------------------------------------------------------
-  // One pair attempted
-  //
-  // Only a clean first attempt earns credit. A word worked out after a
-  // miss still completes the pair, but doesn't move her forward — which
-  // is what stops guess-until-it-works from being a viable strategy.
+  // One answer
   // ---------------------------------------------------------
   async function handleAnswer(
     wordText: string,
@@ -170,17 +231,15 @@ export default function PlayPage() {
   ) {
     if (!child || !plan) return;
 
-    const w = [...plan.newWords, ...plan.reviewWords].find(
+    const w = [...plan.newWords, ...plan.reviewWords, ...wordsUpToLevel(plan.level)].find(
       (x) => x.word === wordText
     );
     if (!w) return;
 
     const prog = progressRef.current;
-    const existing = prog.find(
-      (p) => p.word === wordText && p.game === 'match_words'
-    );
+    const existing = prog.find((p) => p.word === wordText && p.game === game);
 
-    // A right answer only counts if it was the first attempt.
+    // Only a clean first attempt earns credit.
     const scored = correct && firstTry;
     const nextCorrect = (existing?.correct_count ?? 0) + (scored ? 1 : 0);
     const nextWrong = (existing?.wrong_count ?? 0) + (correct ? 0 : 1);
@@ -192,7 +251,7 @@ export default function PlayPage() {
         {
           child_id: child.id,
           word: wordText,
-          game: 'match_words' as const,
+          game,
           level_added: w.level,
           correct_count: nextCorrect,
           wrong_count: nextWrong,
@@ -207,9 +266,7 @@ export default function PlayPage() {
 
     if (saved) {
       progressRef.current = [
-        ...prog.filter(
-          (p) => !(p.word === wordText && p.game === 'match_words')
-        ),
+        ...prog.filter((p) => !(p.word === wordText && p.game === game)),
         saved,
       ];
     }
@@ -246,7 +303,8 @@ export default function PlayPage() {
 
     if (status.passed && child.current_level < MAX_LEVEL) {
       const level = child.current_level + 1;
-      setChild({ ...child, current_level: level });
+      const kid = { ...child, current_level: level };
+      setChild(kid);
       await supabase
         .from('children')
         .update({ current_level: level })
@@ -254,7 +312,6 @@ export default function PlayPage() {
 
       const nextPlan = planLevel(level, progressRef.current);
       setPlan(nextPlan);
-      buildRound(nextPlan);
       setPhase('level-up');
       playHost(child.host!, 'level-complete');
       return;
@@ -266,7 +323,7 @@ export default function PlayPage() {
       return;
     }
 
-    buildRound(plan);
+    startRound(plan, child);
   }
 
   // ---------------------------------------------------------
@@ -291,10 +348,8 @@ export default function PlayPage() {
         className="object-cover"
       />
 
-      {/* Always visible, whatever phase we're in */}
       <button
         onClick={() => {
-          // Straight out if she hasn't actually started yet.
           if (phase === 'welcome' || phase === 'game-intro') router.push('/menu');
           else setExiting(true);
         }}
@@ -328,7 +383,16 @@ export default function PlayPage() {
           <div className="pointer-events-none absolute inset-x-[7%] inset-y-[7%] z-0 rounded-[2.5rem] border-[6px] border-white bg-white/30 shadow-2xl backdrop-blur-[3px]" />
 
           <div className="absolute inset-x-[7%] inset-y-[7%] z-10">
-            {round.length > 0 ? (
+            {game === 'match_spoken_word' ? (
+              questions.length > 0 ? (
+                <MatchSpokenWord
+                  questions={questions}
+                  host={child.host}
+                  onAnswer={handleAnswer}
+                  onRoundDone={handleRoundDone}
+                />
+              ) : null
+            ) : round.length > 0 ? (
               <MatchWords
                 words={round}
                 distractors={extras}
@@ -345,7 +409,6 @@ export default function PlayPage() {
             )}
           </div>
 
-          {/* Quiet progress readout for a grown-up looking over a shoulder */}
           <p className="font-game absolute bottom-3 right-6 z-20 text-xl text-white/80 drop-shadow">
             Level {child.current_level} · new {status.newDone}/
             {status.newNeeded} · review {status.reviewRight}/
@@ -378,23 +441,27 @@ export default function PlayPage() {
       {phase === 'game-intro' && (
         <>
           <div className="pointer-events-none absolute inset-x-[7%] inset-y-[7%] z-0 rounded-[2.5rem] border-[6px] border-white bg-white/30 shadow-2xl backdrop-blur-[3px]" />
-          <div className="pointer-events-none absolute inset-x-[7%] inset-y-[7%] z-10">
-            <MatchWordsDemo host={child.host} />
-          </div>
+
+          {/* Match the Words plays itself behind her. The spoken-word game
+              is audio-led, so a silent demo would be misleading. */}
+          {game === 'match_words' && (
+            <div className="pointer-events-none absolute inset-x-[7%] inset-y-[7%] z-10">
+              <MatchWordsDemo host={child.host} />
+            </div>
+          )}
 
           <HostIntro
             host={child.host}
-            steps={gameStep('game-match-words')}
+            steps={gameStep(INTRO_CLIP[game])}
             variant="game"
             onDone={finishGameIntro}
           />
         </>
       )}
 
-      {/* Level passed — she comes to the middle of the room to celebrate */}
+      {/* Level passed */}
       {phase === 'level-up' && (
         <div className="absolute inset-0 z-30 bg-black/35">
-          {/* Confetti across the top of the screen */}
           {['12%', '30%', '50%', '70%', '88%'].map((x, i) => (
             <Confetti
               key={x}
@@ -421,13 +488,12 @@ export default function PlayPage() {
             </p>
           </div>
 
-          {/* Host, centre stage */}
           <div className="absolute bottom-0 left-1/2 h-[62%] -translate-x-1/2">
             <HostAnimation host={child.host} loops={0} className="h-full" />
           </div>
 
           <button
-            onClick={() => setPhase('playing')}
+            onClick={() => plan && child && startRound(plan, child)}
             className="font-display absolute bottom-10 right-10 rounded-full border-[6px] border-white bg-mint px-16 py-7 text-5xl text-white shadow-2xl transition-transform active:scale-95"
             style={{
               boxShadow:
