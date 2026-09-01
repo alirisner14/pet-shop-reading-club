@@ -17,6 +17,15 @@ import HostReaction, { type Reaction } from '@/components/host/HostReaction';
 import HostAnimation from '@/components/host/HostAnimation';
 import Loading from '@/components/ui/Loading';
 import ExitModal from '@/components/ui/ExitModal';
+import PetCarousel from '@/components/game/PetCarousel';
+import RewardPicker from '@/components/game/RewardPicker';
+import { petByKey } from '@/data/pets';
+import {
+  offerRewards,
+  rewardByKey,
+  tierForLevel,
+  type Reward,
+} from '@/data/rewards';
 import {
   planLevel,
   levelStatus,
@@ -24,8 +33,6 @@ import {
   distractorWords,
   confusableWords,
   pairsPerRound,
-  meterPercent,
-  METER_TARGET,
   MASTERY_TARGET,
   unlockedGames,
   type LevelPlan,
@@ -35,7 +42,15 @@ import { playHost } from '@/lib/audio';
 import type { Child, ChildWord, MiniGame } from '@/types';
 import type { Word } from '@/data/words';
 
-type Phase = 'welcome' | 'game-intro' | 'playing' | 'meter-full' | 'level-up';
+type Phase =
+  | 'welcome'
+  | 'game-intro'
+  | 'playing'
+  | 'meter-full'
+  | 'level-up'
+  | 'choose-pet'
+  | 'pet-chosen'
+  | 'reward';
 
 const METER_CUE_STEP = 2;
 const REACTION_EVERY = 3;
@@ -73,6 +88,8 @@ export default function PlayPage() {
   const [meterVisible, setMeterVisible] = useState(false);
   const [demoMeter, setDemoMeter] = useState<number | null>(null);
   const [exiting, setExiting] = useState(false);
+  const [offer, setOffer] = useState<Reward[]>([]);
+  const [earned, setEarned] = useState<Set<string>>(new Set());
 
   const loaded = useRef(false);
   const progressRef = useRef<ChildWord[]>([]);
@@ -153,10 +170,12 @@ export default function PlayPage() {
         return;
       }
 
-      const [{ data: kid }, { data: words }] = await Promise.all([
-        supabase.from('children').select('*').eq('id', id).single(),
-        supabase.from('child_words').select('*').eq('child_id', id),
-      ]);
+      const [{ data: kid }, { data: words }, { data: prizes }] =
+        await Promise.all([
+          supabase.from('children').select('*').eq('id', id).single(),
+          supabase.from('child_words').select('*').eq('child_id', id),
+          supabase.from('child_rewards').select('reward_key').eq('child_id', id),
+        ]);
 
       if (!kid || !kid.host) {
         router.replace('/menu');
@@ -164,6 +183,7 @@ export default function PlayPage() {
       }
 
       progressRef.current = words ?? [];
+      setEarned(new Set((prizes ?? []).map((r) => r.reward_key)));
       const p = planLevel(kid.current_level, progressRef.current);
 
       setChild(kid);
@@ -283,10 +303,7 @@ export default function PlayPage() {
 
       await supabase
         .from('children')
-        .update({
-          meter_fill: meterPercent(count),
-          last_played_at: new Date().toISOString(),
-        })
+        .update({ last_played_at: new Date().toISOString() })
         .eq('id', child.id);
     } else if (!correct) {
       setStreak(0);
@@ -313,17 +330,85 @@ export default function PlayPage() {
       const nextPlan = planLevel(level, progressRef.current);
       setPlan(nextPlan);
       setPhase('level-up');
+      await playHost(child.host!, 'meter-full');
       playHost(child.host!, 'level-complete');
       return;
     }
 
-    if (correctCount >= METER_TARGET) {
-      setPhase('meter-full');
-      playHost(child.host!, 'meter-full');
+    startRound(plan, child);
+  }
+
+  // ---------------------------------------------------------
+  // What happens after a level is celebrated
+  //
+  // The very first completed level earns her the pet — that's what the
+  // whole welcome promised. Every level after earns a present for it.
+  // ---------------------------------------------------------
+  function afterCelebration() {
+    if (!child || !plan) return;
+
+    if (!child.pet_key) {
+      setPhase('choose-pet');
+      playHost(child.host!, 'choose-pet');
       return;
     }
 
+    const pet = petByKey(child.pet_key);
+    if (!pet) return startRound(plan, child);
+
+    setOffer(offerRewards(child.current_level, pet.kind, earned));
+    setPhase('reward');
+    playHost(child.host!, 'choose-reward');
+  }
+
+  async function claimReward(rewardKey: string) {
+    if (!child || !plan) return;
+
+    const reward = rewardByKey(rewardKey);
+    if (!reward) return;
+
+    setEarned(new Set(earned).add(rewardKey));
+
+    await supabase.from('child_rewards').insert({
+      child_id: child.id,
+      reward_key: rewardKey,
+      tier: tierForLevel(reward.from),
+      earned_level: child.current_level - 1,
+    });
+
+    playHost(child.host!, 'reward-placed');
     startRound(plan, child);
+  }
+
+  // ---------------------------------------------------------
+  // Adoption
+  // ---------------------------------------------------------
+  async function adoptPet(petKey: string) {
+    if (!child) return;
+
+    const updated = {
+      ...child,
+      pet_key: petKey,
+      pet_adopted_at: new Date().toISOString(),
+      pet_taken_home: true,
+      meter_fill: 0,
+    };
+
+    setChild(updated);
+    setPhase('pet-chosen');
+
+    await supabase
+      .from('children')
+      .update({
+        pet_key: petKey,
+        pet_adopted_at: updated.pet_adopted_at,
+        pet_taken_home: true,
+        meter_fill: 0,
+      })
+      .eq('id', child.id);
+
+    await playHost(child.host!, 'pet-chosen');
+    playHost(child.host!, 'take-home');
   }
 
   // ---------------------------------------------------------
@@ -336,6 +421,14 @@ export default function PlayPage() {
     : '/images/screens/pet-shop-bg.webp';
 
   const status = levelStatus(plan, progressRef.current);
+
+  // The meter IS the level. It fills as she works through the level's
+  // requirements, so a full meter and a finished level are one event —
+  // which is what makes a present at the top of it make sense.
+  const levelTotal = status.newNeeded + status.reviewNeeded;
+  const levelDone = status.newDone + status.reviewRight;
+  const levelPercent =
+    levelTotal === 0 ? 0 : Math.round((levelDone / levelTotal) * 100);
 
   return (
     <main className="relative h-dvh w-full overflow-hidden">
@@ -372,7 +465,7 @@ export default function PlayPage() {
       )}
 
       <RewardMeter
-        percent={demoMeter ?? meterPercent(correctCount)}
+        percent={demoMeter ?? levelPercent}
         host={child.host}
         visible={meterVisible}
       />
@@ -488,12 +581,17 @@ export default function PlayPage() {
             </p>
           </div>
 
-          <div className="absolute bottom-0 left-1/2 h-[62%] -translate-x-1/2">
-            <HostAnimation host={child.host} loops={0} className="h-full" />
+          {/* Centre stage for the celebration */}
+          <div className="absolute inset-0 flex items-center justify-center">
+            <HostAnimation
+              host={child.host}
+              loops={0}
+              className="h-[78%] w-[45%]"
+            />
           </div>
 
           <button
-            onClick={() => plan && child && startRound(plan, child)}
+            onClick={afterCelebration}
             className="font-display absolute bottom-10 right-10 rounded-full border-[6px] border-white bg-mint px-16 py-7 text-5xl text-white shadow-2xl transition-transform active:scale-95"
             style={{
               boxShadow:
@@ -505,6 +603,71 @@ export default function PlayPage() {
         </div>
       )}
 
+      {/* Choosing a pet */}
+      {phase === 'choose-pet' && (
+        <PetCarousel host={child.host} onChoose={adoptPet} />
+      )}
+
+      {/* Just adopted */}
+      {phase === 'pet-chosen' && (
+        <div className="absolute inset-0 z-40 bg-black/35">
+          {['20%', '50%', '80%'].map((x, i) => (
+            <Confetti
+              key={x}
+              x={x}
+              y={`${14 + (i % 2) * 6}%`}
+              pieces={20}
+              spread={300}
+            />
+          ))}
+
+          <div className="absolute inset-x-0 top-[8%] text-center">
+            <p
+              className="font-display animate-pop-in text-8xl text-white"
+              style={{
+                WebkitTextStroke: '5px #F49AC1',
+                paintOrder: 'stroke fill',
+                filter: 'drop-shadow(0 6px 10px rgba(0,0,0,0.35))',
+              }}
+            >
+              Your new friend!
+            </p>
+          </div>
+
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="relative h-[55%] w-[45%]">
+              <Image
+                src={petByKey(child.pet_key)?.image ?? ''}
+                alt=""
+                fill
+                sizes="45vw"
+                className="animate-pop-in object-contain"
+                style={{ filter: 'drop-shadow(0 14px 20px rgba(0,0,0,0.3))' }}
+              />
+            </div>
+          </div>
+
+          <button
+            onClick={() => plan && child && startRound(plan, child)}
+            className="font-display hover-hop absolute bottom-10 left-1/2 -translate-x-1/2 rounded-full border-[6px] border-white bg-mint px-20 py-7 text-5xl text-white shadow-2xl transition-transform active:scale-95"
+            style={{
+              boxShadow:
+                'inset 0 4px 10px rgba(255,255,255,0.5), inset 0 -5px 12px rgba(0,0,0,0.14), 0 12px 26px rgba(0,0,0,0.28)',
+            }}
+          >
+            Take me home!
+          </button>
+        </div>
+      )}
+
+      {phase === 'reward' && (
+        <RewardPicker
+          host={child.host}
+          rewards={offer}
+          onChoose={claimReward}
+        />
+      )}
+
       {phase === 'meter-full' && (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-6 bg-black/35">
           <div className="animate-pop-in rounded-[2rem] border-[6px] border-white bg-white/95 px-14 py-8 text-center">
@@ -514,8 +677,8 @@ export default function PlayPage() {
             </p>
           </div>
 
-          <div className="h-[36%]">
-            <HostAnimation host={child.host} loops={0} className="h-full" />
+          <div className="h-[52%] w-[36%]">
+            <HostAnimation host={child.host} loops={0} className="h-full w-full" />
           </div>
 
           <button
