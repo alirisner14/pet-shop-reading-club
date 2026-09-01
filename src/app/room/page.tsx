@@ -7,6 +7,7 @@ import Image from 'next/image';
 import { createClient } from '@/lib/supabase/client';
 import Loading from '@/components/ui/Loading';
 import { petByKey } from '@/data/pets';
+import PetSprite from '@/components/game/PetSprite';
 import {
   rewardByKey,
   placementOf,
@@ -263,14 +264,11 @@ export default function RoomPage() {
               filter: 'drop-shadow(0 12px 14px rgba(0,0,0,0.3))',
             }}
           >
-            <Image
-              src={pet.image}
-              alt={pet.label}
-              width={600}
-              height={600}
-              sizes="30vw"
-              className="h-auto w-full object-contain"
+            <PetSprite
+              pet={pet}
               priority
+              sizes="30vw"
+              className="aspect-square w-full"
             />
           </div>
         )}

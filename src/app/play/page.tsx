@@ -20,6 +20,7 @@ import ExitModal from '@/components/ui/ExitModal';
 import PetCarousel from '@/components/game/PetCarousel';
 import RewardPicker from '@/components/game/RewardPicker';
 import { petByKey } from '@/data/pets';
+import PetSprite from '@/components/game/PetSprite';
 import {
   offerRewards,
   rewardByKey,
@@ -635,15 +636,17 @@ export default function PlayPage() {
           </div>
 
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="relative h-[55%] w-[45%]">
-              <Image
-                src={petByKey(child.pet_key)?.image ?? ''}
-                alt=""
-                fill
-                sizes="45vw"
-                className="animate-pop-in object-contain"
-                style={{ filter: 'drop-shadow(0 14px 20px rgba(0,0,0,0.3))' }}
-              />
+            <div
+              className="h-[55%] w-[45%]"
+              style={{ filter: 'drop-shadow(0 14px 20px rgba(0,0,0,0.3))' }}
+            >
+              {petByKey(child.pet_key) && (
+                <PetSprite
+                  pet={petByKey(child.pet_key)!}
+                  sizes="45vw"
+                  className="animate-pop-in h-full w-full"
+                />
+              )}
             </div>
           </div>
 

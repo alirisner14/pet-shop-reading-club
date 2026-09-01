@@ -246,8 +246,8 @@ export const SIGHT_WORDS: Word[] = [
 // ------------------------------------------------------------
 
 export const THEME_WORDS: Word[] = [
-  { word: 'cat',    level: 1,  picture: { kind: 'image', value: 'pets/Kitten_OrangeTabby.webp' },        phonemes: ['c', 'a', 't'] },
-  { word: 'dog',    level: 1,  picture: { kind: 'image', value: 'pets/Puppy_GoldenRetriever.webp' },     phonemes: ['d', 'o', 'g'] },
+  { word: 'cat',    level: 1,  picture: { kind: 'image', value: 'pets/Kitten_OrangeTabby_Open.webp' },        phonemes: ['c', 'a', 't'] },
+  { word: 'dog',    level: 1,  picture: { kind: 'image', value: 'pets/Puppy_GoldenRetriever_Open.webp' },     phonemes: ['d', 'o', 'g'] },
   { word: 'bed',    level: 2,  picture: { kind: 'image', value: 'rewards/PetReward_Bed_Blue.webp' },     phonemes: ['b', 'e', 'd'] },
   { word: 'ball',   level: 2,  picture: { kind: 'image', value: 'rewards/PuppyReward_Ball_Red.webp' } },
   { word: 'bone',   level: 3,  picture: { kind: 'image', value: 'rewards/PuppyReward_Bone.webp' } },

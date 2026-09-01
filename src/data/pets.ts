@@ -1,73 +1,67 @@
 // src/data/pets.ts
 //
-// The eight adoptable pets. `key` is what gets stored in the database,
-// so these strings shouldn't change once a child has adopted one.
+// The eight adoptable pets.
 //
-// Kind matters for rewards: kittens get yarn and scratching posts,
-// puppies get bones and tennis balls.
+// `key` is stored in the database, so once a child has adopted a pet
+// these strings must not change — renaming one would orphan her pet.
+//
+// Every pet has an eyes-open and an eyes-closed image. That pair alone
+// is enough for a blink, which is most of what makes a static character
+// feel alive. Longer sequences (_Lay, _Spin, _Wag, _Swish) follow the
+// same base name plus a frame number.
 
 export type PetKind = 'kitten' | 'puppy';
 
 export type Pet = {
   key: string;
   kind: PetKind;
-  /** Only used for screen readers — the carousel shows no names. */
+  /** Filename stem, e.g. 'Kitten_LongHair'. Frames build from this. */
+  base: string;
+  /** Screen-reader label. The carousel shows no names. */
   label: string;
-  image: string;
 };
 
 export const PETS: Pet[] = [
-  {
-    key: 'kitten_pink_mainecoon',
-    kind: 'kitten',
-    label: 'Pink fluffy kitten',
-    image: '/images/pets/Kitten_PinkMaineCoon.webp',
-  },
-  {
-    key: 'kitten_scottish_fold',
-    kind: 'kitten',
-    label: 'Gray folded-ear kitten',
-    image: '/images/pets/Kitten_ScottishFold.webp',
-  },
-  {
-    key: 'kitten_blue_mainecoon',
-    kind: 'kitten',
-    label: 'Blue fluffy kitten',
-    image: '/images/pets/Kitten_MaineCoon.webp',
-  },
-  {
-    key: 'kitten_orange_tabby',
-    kind: 'kitten',
-    label: 'Orange tabby kitten',
-    image: '/images/pets/Kitten_OrangeTabby.webp',
-  },
-  {
-    key: 'puppy_golden_retriever',
-    kind: 'puppy',
-    label: 'Golden retriever puppy',
-    image: '/images/pets/Puppy_GoldenRetriever.webp',
-  },
-  {
-    key: 'puppy_pomeranian',
-    kind: 'puppy',
-    label: 'Purple pomeranian puppy',
-    image: '/images/pets/Puppy_Pomeranian.webp',
-  },
-  {
-    key: 'puppy_german_shepherd',
-    kind: 'puppy',
-    label: 'German shepherd puppy',
-    image: '/images/pets/Puppy_GermanShepard.webp',
-  },
-  {
-    key: 'puppy_boston_terrier',
-    kind: 'puppy',
-    label: 'Boston terrier puppy',
-    image: '/images/pets/Puppy_BostonTerrier.webp',
-  },
+  { key: 'kitten_longhair', kind: 'kitten', base: 'Kitten_LongHair', label: 'Pink fluffy kitten' },
+  { key: 'kitten_scottish_fold', kind: 'kitten', base: 'Kitten_ScottishFold', label: 'Gray folded-ear kitten' },
+  { key: 'kitten_blue_mainecoon', kind: 'kitten', base: 'Kitten_MaineCoon', label: 'Blue fluffy kitten' },
+  { key: 'kitten_orange_tabby', kind: 'kitten', base: 'Kitten_OrangeTabby', label: 'Orange tabby kitten' },
+  { key: 'puppy_golden_retriever', kind: 'puppy', base: 'Puppy_GoldenRetriever', label: 'Golden retriever puppy' },
+  { key: 'puppy_pomeranian', kind: 'puppy', base: 'Puppy_Pomeranian', label: 'Purple pomeranian puppy' },
+  { key: 'puppy_german_shepherd', kind: 'puppy', base: 'Puppy_GermanShepard', label: 'German shepherd puppy' },
+  { key: 'puppy_boston_terrier', kind: 'puppy', base: 'Puppy_BostonTerrier', label: 'Boston terrier puppy' },
 ];
 
 export function petByKey(key: string | null): Pet | null {
   if (!key) return null;
   return PETS.find((p) => p.key === key) ?? null;
+}
+
+// ------------------------------------------------------------
+// Image paths
+// ------------------------------------------------------------
+
+const DIR = '/images/pets';
+
+/** Eyes open — the default. */
+export function petOpen(pet: Pet): string {
+  return `${DIR}/${pet.base}_Open.webp`;
+}
+
+/** Eyes closed — the other half of a blink. */
+export function petClosed(pet: Pet): string {
+  return `${DIR}/${pet.base}_Closed.webp`;
+}
+
+/**
+ * Which tail animation a pet uses. Puppies wag, kittens swish — the
+ * files are named differently, so this keeps that detail in one place.
+ */
+export function tailAnimation(pet: Pet): string {
+  return pet.kind === 'puppy' ? 'Wag' : 'Swish';
+}
+
+/** One frame of a named sequence, e.g. petFrame(pet, 'Lay', 3). */
+export function petFrame(pet: Pet, animation: string, frame: number): string {
+  return `${DIR}/${pet.base}_${animation}_Frame${frame}.webp`;
 }

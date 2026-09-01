@@ -2,8 +2,8 @@
 'use client';
 
 import { useState } from 'react';
-import Image from 'next/image';
 import ArrowButton from '@/components/ui/ArrowButton';
+import PetSprite from '@/components/game/PetSprite';
 import { PETS } from '@/data/pets';
 import type { HostChoice } from '@/types';
 
@@ -55,16 +55,16 @@ export default function PetCarousel({
             size={110}
           />
 
-          <div className="relative h-full flex-1">
-            <Image
+          <div
+            className="h-full flex-1"
+            style={{ filter: 'drop-shadow(0 12px 18px rgba(0,0,0,0.28))' }}
+          >
+            <PetSprite
               key={pet.key}
-              src={pet.image}
-              alt={pet.label}
-              fill
-              sizes="50vw"
+              pet={pet}
               priority
-              className="animate-pop-in object-contain"
-              style={{ filter: 'drop-shadow(0 12px 18px rgba(0,0,0,0.28))' }}
+              sizes="50vw"
+              className="animate-pop-in h-full w-full"
             />
           </div>
 
