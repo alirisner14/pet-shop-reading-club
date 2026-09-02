@@ -8,7 +8,12 @@ import {
   useRef,
   useState,
 } from 'react';
-import { playWord, playPraise, playCorrection } from '@/lib/audio';
+import {
+  playWord,
+  playWordNow,
+  playPraise,
+  playCorrection,
+} from '@/lib/audio';
 import Confetti from '@/components/game/Confetti';
 import { MAX_ATTEMPTS } from '@/lib/progression';
 import type { Word } from '@/data/words';
@@ -85,6 +90,11 @@ export default function MatchWords({
   const [pointer, setPointer] = useState<Point | null>(null);
   const [entered, setEntered] = useState(false);
 
+  // React runs state updaters twice in development. Anything with a side
+  // effect — like telling the parent the round is over — has to live
+  // outside them, or it happens twice and the level jumps.
+  const finished = useRef(false);
+
   const [leftPts, setLeftPts] = useState<Point[]>([]);
   const [rightPts, setRightPts] = useState<Point[]>([]);
   const [bursts, setBursts] = useState<{ id: number; x: number; y: number }[]>(
@@ -117,10 +127,23 @@ export default function MatchWords({
     setShowing(null);
     setBursts([]);
 
+    finished.current = false;
+
     setEntered(false);
     const id = setTimeout(() => setEntered(true), 1400);
     return () => clearTimeout(id);
   }, [words, shuffleRight]);
+
+  // Round over — checked here rather than inside the updater.
+  useEffect(() => {
+    if (finished.current) return;
+    if (words.length === 0 || matched.size < words.length) return;
+
+    finished.current = true;
+    const id = setTimeout(onRoundDone, 700);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matched, words.length]);
 
   // ---------------------------------------------------------
   // Measuring
@@ -180,7 +203,7 @@ export default function MatchWords({
     if (showing) return;
 
     measure();
-    playWord(text);
+    playWordNow(text);
     setGrab({ side, slot });
     setPointer(toLocal(e));
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
@@ -272,11 +295,7 @@ export default function MatchWords({
     setBursting((prev) => new Set(prev).add(pairIndex));
 
     setTimeout(() => {
-      setMatched((prev) => {
-        const next = new Set(prev).add(pairIndex);
-        if (next.size === words.length) setTimeout(onRoundDone, 700);
-        return next;
-      });
+      setMatched((prev) => new Set(prev).add(pairIndex));
     }, 420);
   }
 

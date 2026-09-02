@@ -2,7 +2,12 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { playWord, playPraise, playCorrection } from '@/lib/audio';
+import {
+  playWord,
+  playWordNow,
+  playPraise,
+  playCorrection,
+} from '@/lib/audio';
 import Confetti from '@/components/game/Confetti';
 import { MAX_ATTEMPTS } from '@/lib/progression';
 import type { Word } from '@/data/words';
@@ -57,6 +62,8 @@ export default function MatchSpokenWord({
   const [entered, setEntered] = useState(false);
 
   const speakerRef = useRef<HTMLButtonElement>(null);
+  // Stops the round being reported finished more than once.
+  const finished = useRef(false);
   const question = questions[index];
 
   // Shuffle the choices; reshuffles on a miss so the layout can't be
@@ -69,6 +76,10 @@ export default function MatchSpokenWord({
   }, [question, shuffleKey]);
 
   // New question — say it once, unprompted.
+  useEffect(() => {
+    finished.current = false;
+  }, [questions]);
+
   useEffect(() => {
     if (!question) return;
 
@@ -91,8 +102,13 @@ export default function MatchSpokenWord({
   if (!question) return null;
 
   function nextQuestion() {
-    if (index + 1 >= questions.length) onRoundDone();
-    else setIndex(index + 1);
+    if (index + 1 >= questions.length) {
+      if (finished.current) return;
+      finished.current = true;
+      onRoundDone();
+    } else {
+      setIndex(index + 1);
+    }
   }
 
   async function choose(word: string) {
@@ -154,7 +170,7 @@ export default function MatchSpokenWord({
       {/* The big listen button */}
       <button
         ref={speakerRef}
-        onClick={() => playWord(question.target.word)}
+        onClick={() => playWordNow(question.target.word)}
         aria-label="Hear the word again"
         className="animate-pop-in flex h-40 w-40 items-center justify-center rounded-full border-[8px] border-white text-7xl shadow-2xl transition-transform active:scale-90"
         style={{

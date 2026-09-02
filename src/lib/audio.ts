@@ -1,16 +1,20 @@
 // src/lib/audio.ts
 //
-// All sound playback goes through here.
+// All sound playback goes through here, and — importantly — through a
+// single queue. Nothing ever plays over anything else.
+//
+// That matters more than it sounds. A five-year-old can't separate two
+// voices: if Maya says "great job!" while the next word is spoken, she
+// hears neither. Sounds now wait their turn.
 //
 // Every call tries the recorded MP3 first. If the file isn't there yet,
-// it falls back to the browser's built-in text-to-speech so the game is
-// playable today. Drop a recording into public/audio/ and it takes over
-// automatically — no code change.
+// it falls back to the browser's built-in speech, so the game stays
+// playable while recordings are still being made. Drop a file into
+// public/audio/ and it takes over automatically.
 //
 // One deliberate exception: individual letter SOUNDS never fall back to
 // speech. Ask a TTS voice for /f/ and it says "eff", which would teach
-// the wrong thing. Those files already exist, so if one is missing we
-// stay silent instead.
+// the wrong thing.
 
 import type { HostChoice } from '@/types';
 import { hostLine } from '@/data/hostScripts';
@@ -18,16 +22,131 @@ import { hostLine } from '@/data/hostScripts';
 const cache = new Map<string, HTMLAudioElement>();
 const missing = new Set<string>(); // paths already known to 404
 
-function get(src: string): HTMLAudioElement | null {
-  if (typeof window === 'undefined') return null;
+type SpeakOptions = { pitch?: number; rate?: number };
 
-  let el = cache.get(src);
-  if (!el) {
-    el = new Audio(src);
-    el.preload = 'auto';
-    cache.set(src, el);
+type Job = {
+  src: string;
+  fallback?: string;
+  opts?: SpeakOptions;
+  resolve: () => void;
+};
+
+// ------------------------------------------------------------
+// The queue
+// ------------------------------------------------------------
+
+let queue: Job[] = [];
+let active: Job | null = null;
+let current: HTMLAudioElement | null = null;
+
+/** Anything beyond this waits; older waiting items are dropped. */
+const MAX_PENDING = 2;
+
+function enqueue(
+  src: string,
+  fallback?: string,
+  opts?: SpeakOptions,
+  interrupt = false
+): Promise<void> {
+  return new Promise((resolve) => {
+    const job: Job = { src, fallback, opts, resolve };
+
+    if (interrupt) {
+      // Clear anything waiting and cut off what's playing.
+      queue.forEach((j) => j.resolve());
+      queue = [];
+      hardStop();
+      active = null;
+    }
+
+    queue.push(job);
+
+    // Don't let a burst of taps build a backlog.
+    while (queue.length > MAX_PENDING) {
+      const dropped = queue.shift();
+      dropped?.resolve();
+    }
+
+    if (!active) next();
+  });
+}
+
+function next() {
+  const job = queue.shift();
+  if (!job) {
+    active = null;
+    return;
   }
-  return el;
+
+  active = job;
+  run(job).then(() => {
+    job.resolve();
+    next();
+  });
+}
+
+function hardStop() {
+  if (current) {
+    current.pause();
+    current.currentTime = 0;
+    current = null;
+  }
+  if (typeof window !== 'undefined' && window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+  }
+}
+
+/** Plays one job to completion. */
+function run(job: Job): Promise<void> {
+  if (missing.has(job.src)) {
+    return job.fallback ? speakNow(job.fallback, job.opts) : Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined') return resolve();
+
+    let el = cache.get(job.src);
+    if (!el) {
+      el = new Audio(job.src);
+      el.preload = 'auto';
+      cache.set(job.src, el);
+    }
+
+    current = el;
+
+    const cleanup = () => {
+      el!.removeEventListener('ended', onEnd);
+      el!.removeEventListener('error', onError);
+      if (current === el) current = null;
+    };
+
+    const onEnd = () => {
+      cleanup();
+      resolve();
+    };
+
+    const onError = () => {
+      cleanup();
+      missing.add(job.src);
+      cache.delete(job.src);
+      if (job.fallback) speakNow(job.fallback, job.opts).then(resolve);
+      else resolve();
+    };
+
+    el.addEventListener('ended', onEnd);
+    el.addEventListener('error', onError);
+
+    el.currentTime = 0;
+    el.play().catch(onError);
+  });
+}
+
+/** Stops everything and empties the queue. */
+export function stopAll() {
+  queue.forEach((j) => j.resolve());
+  queue = [];
+  active = null;
+  hardStop();
 }
 
 // ------------------------------------------------------------
@@ -46,15 +165,12 @@ if (typeof window !== 'undefined' && window.speechSynthesis) {
   window.speechSynthesis.onvoiceschanged = loadVoices;
 }
 
-/** Best available English voice, preferring a higher-quality one. */
 function pickVoice(): SpeechSynthesisVoice | null {
   if (voices.length === 0) loadVoices();
 
   const english = voices.filter((v) => v.lang.startsWith('en'));
   if (english.length === 0) return null;
 
-  // Google and Microsoft Natural voices sound noticeably better than the
-  // default system ones.
   return (
     english.find((v) => /google/i.test(v.name)) ??
     english.find((v) => /natural/i.test(v.name)) ??
@@ -63,10 +179,7 @@ function pickVoice(): SpeechSynthesisVoice | null {
   );
 }
 
-type SpeakOptions = { pitch?: number; rate?: number };
-
-/** Speaks text aloud and resolves when finished. */
-export function speak(text: string, opts: SpeakOptions = {}): Promise<void> {
+function speakNow(text: string, opts: SpeakOptions = {}): Promise<void> {
   return new Promise((resolve) => {
     if (typeof window === 'undefined' || !window.speechSynthesis || !text) {
       return resolve();
@@ -78,8 +191,8 @@ export function speak(text: string, opts: SpeakOptions = {}): Promise<void> {
     const voice = pickVoice();
     if (voice) u.voice = voice;
 
-    u.pitch = opts.pitch ?? 1.1; // slightly bright, kid-friendly
-    u.rate = opts.rate ?? 0.9; // a touch slower than default
+    u.pitch = opts.pitch ?? 1.1;
+    u.rate = opts.rate ?? 0.9;
     u.onend = () => resolve();
     u.onerror = () => resolve();
 
@@ -87,97 +200,55 @@ export function speak(text: string, opts: SpeakOptions = {}): Promise<void> {
   });
 }
 
-// ------------------------------------------------------------
-// Core playback
-// ------------------------------------------------------------
-
-/**
- * Plays a file. If it's missing and `fallback` text is given,
- * speaks that instead.
- */
-export function play(
-  src: string,
-  fallback?: string,
-  opts?: SpeakOptions
-): Promise<void> {
-  // Already known to be absent — skip straight to speech.
-  if (missing.has(src)) {
-    return fallback ? speak(fallback, opts) : Promise.resolve();
-  }
-
-  return new Promise((resolve) => {
-    const el = get(src);
-    if (!el) return resolve();
-
-    const cleanup = () => {
-      el.removeEventListener('ended', onEnd);
-      el.removeEventListener('error', onError);
-    };
-
-    const onEnd = () => {
-      cleanup();
-      resolve();
-    };
-
-    const onError = () => {
-      cleanup();
-      missing.add(src);
-      cache.delete(src);
-      if (fallback) speak(fallback, opts).then(resolve);
-      else resolve();
-    };
-
-    el.addEventListener('ended', onEnd);
-    el.addEventListener('error', onError);
-
-    el.currentTime = 0;
-    el.play().catch(onError);
-  });
-}
-
-/** Stops all audio and speech. */
-export function stopAll() {
-  cache.forEach((el) => {
-    el.pause();
-    el.currentTime = 0;
-  });
-  if (typeof window !== 'undefined' && window.speechSynthesis) {
-    window.speechSynthesis.cancel();
-  }
+/** Speaks text directly, queued like everything else. */
+export function speak(text: string, opts: SpeakOptions = {}): Promise<void> {
+  return enqueue('', text, opts);
 }
 
 // ------------------------------------------------------------
 // Convenience wrappers
 // ------------------------------------------------------------
 
-/** A single word, said normally. Falls back to speech. */
+/** A single word, said normally. */
 export function playWord(word: string): Promise<void> {
   const key = word.toLowerCase().replace(/[^a-z]/g, '');
-  return play(`/audio/words/${key}.mp3`, word, { rate: 0.8, pitch: 1.1 });
+  return enqueue(`/audio/words/${key}.mp3`, word, { rate: 0.8, pitch: 1.1 });
 }
 
-// Each host gets its own pitch so TTS at least distinguishes them.
+/** Same, but cuts off whatever is playing — for a replay button. */
+export function playWordNow(word: string): Promise<void> {
+  const key = word.toLowerCase().replace(/[^a-z]/g, '');
+  return enqueue(
+    `/audio/words/${key}.mp3`,
+    word,
+    { rate: 0.8, pitch: 1.1 },
+    true
+  );
+}
+
 const HOST_PITCH: Record<HostChoice, number> = { maya: 1.25, alex: 0.9 };
 
-/** A host line. Falls back to speech using the script text. */
+/** A host line. Waits its turn. */
 export function playHost(host: HostChoice, clip: string): Promise<void> {
-  return play(`/audio/host/${host}/${clip}.mp3`, hostLine(clip), {
+  return enqueue(`/audio/host/${host}/${clip}.mp3`, hostLine(clip), {
     pitch: HOST_PITCH[host],
     rate: 0.92,
   });
 }
 
-/**
- * One letter sound. NO speech fallback on purpose — see the note at the
- * top of this file.
- */
-export function playSound(sound: string): Promise<void> {
-  return play(`/audio/sounds/${sound}.mp3`);
+/** A host line that interrupts — the speaker button in a speech bubble. */
+export function playHostNow(host: HostChoice, clip: string): Promise<void> {
+  return enqueue(
+    `/audio/host/${host}/${clip}.mp3`,
+    hostLine(clip),
+    { pitch: HOST_PITCH[host], rate: 0.92 },
+    true
+  );
 }
 
-/** Plays clips back to back. */
-export async function playSequence(paths: string[]): Promise<void> {
-  for (const p of paths) await play(p);
+/** One letter sound. No speech fallback — see the note at the top. */
+export function playSound(sound: string): Promise<void> {
+  return enqueue(`/audio/sounds/${sound}.mp3`);
 }
 
 /** Stretched-out blending for Snail Talk: /f/ ... /i/ ... /sh/ */
@@ -191,7 +262,7 @@ export async function playBlend(phonemes: string[], gap = 600): Promise<void> {
 }
 
 // ------------------------------------------------------------
-// Random praise / correction so it isn't the same line every time
+// Random praise / correction, so it isn't the same line every time
 // ------------------------------------------------------------
 
 const COUNTS = { correct: 8, wrong: 5, encourage: 4 };

@@ -30,6 +30,7 @@ export type Child = {
   avatar_color: string | null;
   host: HostChoice | null;
   pet_key: string | null;
+  pet_name: string | null;
   pet_adopted_at: string | null;
   pet_taken_home: boolean;
   current_level: number;

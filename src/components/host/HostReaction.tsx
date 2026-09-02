@@ -1,6 +1,7 @@
 // src/components/host/HostReaction.tsx
 'use client';
 
+import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import type { HostChoice } from '@/types';
 
@@ -26,19 +27,35 @@ export default function HostReaction({
   reaction,
 }: {
   host: HostChoice;
-  reaction: Reaction;
+  /** null slides her back off the left edge. */
+  reaction: Reaction | null;
 }) {
+  // The pose is held after `reaction` clears, so she keeps her
+  // expression on the way out instead of snapping to neutral.
+  const [pose, setPose] = useState<Reaction>('excited');
+
+  useEffect(() => {
+    if (reaction) setPose(reaction);
+  }, [reaction]);
+
+  const shown = reaction !== null;
+
   return (
-    <div className="animate-rise-up pointer-events-none absolute bottom-0 left-[1%] z-30 h-[62%]">
-      <div className="relative h-full" style={{ aspectRatio: '3 / 5' }}>
-        <Image
-          src={IMAGES[host][reaction]}
-          alt=""
-          fill
-          sizes="(max-width: 768px) 50vw, 40vw"
-          className="object-contain object-bottom drop-shadow-2xl"
-        />
-      </div>
+    <div
+      className={`pointer-events-none absolute bottom-0 left-0 z-30 h-[128%] w-[68%] transition-transform duration-500 ease-out ${
+        shown
+          ? 'translate-x-0 translate-y-[22%]'
+          : '-translate-x-[70%] translate-y-[30%]'
+      }`}
+    >
+      <Image
+        src={IMAGES[host][pose]}
+        alt=""
+        fill
+        sizes="(max-width: 768px) 80vw, 68vw"
+        className="object-contain drop-shadow-2xl"
+        style={{ objectPosition: 'left bottom' }}
+      />
     </div>
   );
 }

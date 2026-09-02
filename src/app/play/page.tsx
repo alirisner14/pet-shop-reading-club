@@ -21,6 +21,7 @@ import PetCarousel from '@/components/game/PetCarousel';
 import RewardPicker from '@/components/game/RewardPicker';
 import { petByKey } from '@/data/pets';
 import PetSprite from '@/components/game/PetSprite';
+import PetNaming from '@/components/game/PetNaming';
 import {
   offerRewards,
   rewardByKey,
@@ -51,6 +52,7 @@ type Phase =
   | 'level-up'
   | 'choose-pet'
   | 'pet-chosen'
+  | 'name-pet'
   | 'reward';
 
 const METER_CUE_STEP = 2;
@@ -127,8 +129,10 @@ export default function PlayPage() {
       if (!target) break;
       used.add(target.word);
 
-      // Choices that actually look like the answer.
-      const choices = confusableWords(target.word, pool, 3);
+      // Lookalikes, but not the very closest ones. Telling "red" from
+      // "bed" by ear alone is a different (and much harder) task than
+      // telling them apart on the page, and it was tipping into unfair.
+      const choices = confusableWords(target.word, pool, 6).slice(2, 5);
       qs.push({ target, choices });
     }
 
@@ -409,7 +413,22 @@ export default function PlayPage() {
       .eq('id', child.id);
 
     await playHost(child.host!, 'pet-chosen');
+  }
+
+  /** Saves the name, then heads home. */
+  async function namePet(name: string) {
+    if (!child || !plan) return;
+
+    setChild({ ...child, pet_name: name });
+    setPhase('playing');
+
+    await supabase
+      .from('children')
+      .update({ pet_name: name })
+      .eq('id', child.id);
+
     playHost(child.host!, 'take-home');
+    startRound(plan, child);
   }
 
   // ---------------------------------------------------------
@@ -503,7 +522,23 @@ export default function PlayPage() {
             )}
           </div>
 
-          <p className="font-game absolute bottom-3 right-6 z-20 text-xl text-white/80 drop-shadow">
+          {/* The pet watches from the side while she plays */}
+          {petByKey(child.pet_key) && (
+            <div className="pointer-events-none absolute bottom-[6%] right-[1%] z-20 h-[30%] w-[18%]">
+              <PetSprite
+                pet={petByKey(child.pet_key)!}
+                sizes="20vw"
+                className="h-full w-full"
+              />
+              {child.pet_name && (
+                <p className="font-game mt-1 text-center text-2xl text-white drop-shadow-lg">
+                  {child.pet_name}
+                </p>
+              )}
+            </div>
+          )}
+
+          <p className="font-game absolute bottom-3 left-6 z-20 text-xl text-white/80 drop-shadow">
             Level {child.current_level} · new {status.newDone}/
             {status.newNeeded} · review {status.reviewRight}/
             {status.reviewNeeded}
@@ -511,7 +546,7 @@ export default function PlayPage() {
         </>
       )}
 
-      {phase === 'playing' && reaction && (
+      {phase === 'playing' && (
         <HostReaction host={child.host} reaction={reaction} />
       )}
 
@@ -651,21 +686,31 @@ export default function PlayPage() {
           </div>
 
           <button
-            onClick={() => plan && child && startRound(plan, child)}
+            onClick={() => setPhase('name-pet')}
             className="font-display hover-hop absolute bottom-10 left-1/2 -translate-x-1/2 rounded-full border-[6px] border-white bg-mint px-20 py-7 text-5xl text-white shadow-2xl transition-transform active:scale-95"
             style={{
               boxShadow:
                 'inset 0 4px 10px rgba(255,255,255,0.5), inset 0 -5px 12px rgba(0,0,0,0.14), 0 12px 26px rgba(0,0,0,0.28)',
             }}
           >
-            Take me home!
+            Name my pet!
           </button>
         </div>
+      )}
+
+      {phase === 'name-pet' && petByKey(child.pet_key) && (
+        <PetNaming
+          pet={petByKey(child.pet_key)!}
+          host={child.host}
+          onName={namePet}
+        />
       )}
 
       {phase === 'reward' && (
         <RewardPicker
           host={child.host}
+          pet={petByKey(child.pet_key)}
+          petName={child.pet_name}
           rewards={offer}
           onChoose={claimReward}
         />

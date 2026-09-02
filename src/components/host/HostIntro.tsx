@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
-import { playHost, stopAll } from '@/lib/audio';
+import { playHostNow, stopAll } from '@/lib/audio';
 import { hostLine } from '@/data/hostScripts';
 import type { HostChoice } from '@/types';
 
@@ -122,6 +122,14 @@ export default function HostIntro({
   const [index, setIndex] = useState(0);
   const [speaking, setSpeaking] = useState(false);
   const [spoken, setSpoken] = useState(false);
+  // Slides her in from the left on the first render rather than having
+  // her simply appear.
+  const [entered, setEntered] = useState(false);
+
+  useEffect(() => {
+    const id = setTimeout(() => setEntered(true), 60);
+    return () => clearTimeout(id);
+  }, []);
 
   const step = steps[index];
   const caption = hostLine(step.clip);
@@ -137,7 +145,7 @@ export default function HostIntro({
   async function speakLine() {
     onSpeak?.(index);
     setSpeaking(true);
-    await playHost(host, step.clip);
+    await playHostNow(host, step.clip);
     setSpeaking(false);
     setSpoken(true);
   }
@@ -153,13 +161,17 @@ export default function HostIntro({
     <div className="absolute inset-0 z-30">
       {/* Character — sized by height, pinned to the bottom-left corner,
           nudged down so her feet crop off the screen edge. */}
-      <div className="absolute bottom-0 left-0 h-[74%] w-[48%] translate-y-[7%]">
+      <div
+        className={`absolute bottom-0 left-0 h-[128%] w-[68%] transition-transform duration-700 ease-out ${
+          entered ? 'translate-x-0 translate-y-[22%]' : '-translate-x-[70%] translate-y-[30%]'
+        }`}
+      >
         <div className="animate-breathe relative h-full w-full">
           <Image
             src={POSES[host][step.pose]}
             alt=""
             fill
-            sizes="(max-width: 768px) 60vw, 48vw"
+            sizes="(max-width: 768px) 80vw, 68vw"
             priority
             className="object-contain"
             style={{
