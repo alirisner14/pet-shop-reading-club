@@ -197,17 +197,52 @@ export function placementOf(reward: Reward): Placement {
   return 'floor';
 }
 
+/** The pet's width as a percentage of the room's. Room and reward scene agree. */
+export const PET_ROOM_WIDTH = 26;
+/** A worn collar's width as a fraction of the pet's width. */
+export const COLLAR_PET_RATIO = 0.34;
+
+export function isCollar(reward: Reward): boolean {
+  return reward.key.includes('collar');
+}
+
 /**
  * Roughly how much of the room's width an item takes up. A cat tree and
- * a ball of yarn shouldn't render at the same size.
+ * a ball of yarn shouldn't render at the same size. Collars match their
+ * size on the pet, so one doesn't change size when it's put on.
  */
 export function sizeOf(reward: Reward): number {
+  if (isCollar(reward)) return PET_ROOM_WIDTH * COLLAR_PET_RATIO;
+
   const big = ['tree_', 'house_', 'scratch_', 'bed_', 'plant_floor', 'friend_'];
-  const small = ['collar', 'mouse_', 'ball_', 'bone', 'tennis', 'yarn_'];
+  const small = ['mouse_', 'ball_', 'bone', 'tennis', 'yarn_'];
 
   if (big.some((p) => reward.key.startsWith(p) || reward.key.includes(p))) {
     return 20;
   }
   if (small.some((p) => reward.key.includes(p))) return 8;
   return 13; // toys, flowers, stool plants
+}
+
+// Where things settle, as a percentage down the screen.
+const FLOOR_MIN = 62;
+const FLOOR_MAX = 88;
+const CEILING_MIN = 3;
+const CEILING_MAX = 20;
+
+/**
+ * Loose snapping: furniture stays on the floor, hanging things stay up
+ * by the ceiling, collars go anywhere.
+ */
+export function snapPosition(reward: Reward, x: number, y: number) {
+  const where = placementOf(reward);
+  const nx = Math.max(4, Math.min(96, x));
+
+  let ny: number;
+  if (where === 'floor') ny = Math.max(FLOOR_MIN, Math.min(FLOOR_MAX, y));
+  else if (where === 'hanging')
+    ny = Math.max(CEILING_MIN, Math.min(CEILING_MAX, y));
+  else ny = Math.max(4, Math.min(94, y));
+
+  return { x: nx, y: ny };
 }

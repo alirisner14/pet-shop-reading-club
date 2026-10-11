@@ -8,12 +8,13 @@ import { createClient } from '@/lib/supabase/client';
 import GameStage from '@/components/game/GameStage';
 import HostReaction, { type Reaction } from '@/components/host/HostReaction';
 import Loading from '@/components/ui/Loading';
-import PetSprite from '@/components/game/PetSprite';
+import PetWithCollar, { type WornCollar } from '@/components/game/PetWithCollar';
+import { rewardByKey } from '@/data/rewards';
 import { planLevel, unlockedGames, type LevelPlan } from '@/lib/progression';
 import { buildRound, type Round } from '@/lib/rounds';
 import { petByKey } from '@/data/pets';
 import { playHost } from '@/lib/audio';
-import type { Child, ChildWord, MiniGame } from '@/types';
+import type { Child, ChildReward, ChildWord, MiniGame } from '@/types';
 
 // Practice
 //
@@ -57,6 +58,7 @@ export default function PracticePage() {
   const [streak, setStreak] = useState(0);
   const [reaction, setReaction] = useState<Reaction | null>(null);
   const [loading, setLoading] = useState(true);
+  const [worn, setWorn] = useState<WornCollar | null>(null);
 
   const loaded = useRef(false);
   const progressRef = useRef<ChildWord[]>([]);
@@ -75,10 +77,16 @@ export default function PracticePage() {
         return;
       }
 
-      const [{ data: kid }, { data: words }] = await Promise.all([
-        supabase.from('children').select('*').eq('id', id).single(),
-        supabase.from('child_words').select('*').eq('child_id', id),
-      ]);
+      const [{ data: kid }, { data: words }, { data: prizes }] =
+        await Promise.all([
+          supabase.from('children').select('*').eq('id', id).single(),
+          supabase.from('child_words').select('*').eq('child_id', id),
+          supabase
+            .from('child_rewards')
+            .select('*')
+            .eq('child_id', id)
+            .eq('on_pet', true),
+        ]);
 
       if (!kid || !kid.host) {
         router.replace('/menu');
@@ -86,6 +94,18 @@ export default function PracticePage() {
       }
 
       progressRef.current = words ?? [];
+
+      // The collar her pet is wearing, if any.
+      const collar = ((prizes ?? []) as ChildReward[])[0];
+      const reward = collar ? rewardByKey(collar.reward_key) : null;
+      if (collar && reward && collar.pos_x !== null && collar.pos_y !== null) {
+        setWorn({
+          image: reward.image,
+          label: reward.label,
+          x: collar.pos_x,
+          y: collar.pos_y,
+        });
+      }
       setChild(kid);
       setPlan(planLevel(kid.current_level, progressRef.current));
       setLoading(false);
@@ -257,11 +277,12 @@ export default function PracticePage() {
           </div>
 
           {child.pet_key && petByKey(child.pet_key) && (
-            <div className="pointer-events-none absolute bottom-[6%] right-[1%] z-20 h-[30%] w-[18%]">
-              <PetSprite
+            <div className="pointer-events-none absolute bottom-[6%] right-[1%] z-20 w-[18%]">
+              <PetWithCollar
                 pet={petByKey(child.pet_key)!}
+                collar={worn}
                 sizes="20vw"
-                className="h-full w-full"
+                className="w-full"
               />
             </div>
           )}

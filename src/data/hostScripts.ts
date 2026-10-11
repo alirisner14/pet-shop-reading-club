@@ -71,6 +71,8 @@ export const HOST_LINES: Record<string, string> = {
   'pet-chosen': 'Oh, what a good choice! Your new friend is so happy.',
   'take-home': "Now let's take your new friend home!",
   'choose-reward': 'You earned a present! Pick one for your pet.',
+  'drag-reward':
+    'Press and hold your present, then drag it up into the room!',
   'reward-placed': 'That looks perfect right there.',
   'level-complete': "You finished a whole level! You're such a good reader.",
   'new-words': 'I have some new words for you. Are you ready?',

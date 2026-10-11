@@ -15,13 +15,18 @@ import HostAnimation from '@/components/host/HostAnimation';
 import Loading from '@/components/ui/Loading';
 import ExitModal from '@/components/ui/ExitModal';
 import PetCarousel from '@/components/game/PetCarousel';
-import RewardPicker from '@/components/game/RewardPicker';
-import { petByKey } from '@/data/pets';
+import RewardPicker, {
+  type PlacedItem,
+  type Spot,
+} from '@/components/game/RewardPicker';
 import PetSprite from '@/components/game/PetSprite';
+import PetWithCollar, { type WornCollar } from '@/components/game/PetWithCollar';
+import { petByKey } from '@/data/pets';
 import PetNaming from '@/components/game/PetNaming';
 import {
   offerRewards,
   rewardByKey,
+  isCollar,
   tierForLevel,
   type Reward,
 } from '@/data/rewards';
@@ -36,7 +41,7 @@ import {
 import { buildRound, type Round } from '@/lib/rounds';
 import { MAX_LEVEL, wordsUpToLevel } from '@/data/words';
 import { playHost } from '@/lib/audio';
-import type { Child, ChildWord, MiniGame } from '@/types';
+import type { Child, ChildReward, ChildWord, MiniGame } from '@/types';
 
 type Phase =
   | 'welcome'
@@ -82,6 +87,9 @@ export default function PlayPage() {
   const [exiting, setExiting] = useState(false);
   const [offer, setOffer] = useState<Reward[]>([]);
   const [earned, setEarned] = useState<Set<string>>(new Set());
+  // What is already in her room, and the collar the pet is wearing.
+  const [placed, setPlaced] = useState<PlacedItem[]>([]);
+  const [worn, setWorn] = useState<(WornCollar & { id: string }) | null>(null);
 
   const loaded = useRef(false);
   const progressRef = useRef<ChildWord[]>([]);
@@ -138,7 +146,7 @@ export default function PlayPage() {
         await Promise.all([
           supabase.from('children').select('*').eq('id', id).single(),
           supabase.from('child_words').select('*').eq('child_id', id),
-          supabase.from('child_rewards').select('reward_key').eq('child_id', id),
+          supabase.from('child_rewards').select('*').eq('child_id', id),
         ]);
 
       if (!kid || !kid.host) {
@@ -147,9 +155,29 @@ export default function PlayPage() {
       }
 
       progressRef.current = words ?? [];
-      setEarned(
-        new Set((prizes ?? []).map((r: { reward_key: string }) => r.reward_key))
-      );
+      const rows = (prizes ?? []) as ChildReward[];
+      setEarned(new Set(rows.map((r) => r.reward_key)));
+
+      const inRoom: PlacedItem[] = [];
+      let wearing: (WornCollar & { id: string }) | null = null;
+      for (const row of rows) {
+        const reward = rewardByKey(row.reward_key);
+        if (!reward || !row.is_placed || row.pos_x === null || row.pos_y === null)
+          continue;
+        if (row.on_pet) {
+          wearing = {
+            id: row.id,
+            image: reward.image,
+            label: reward.label,
+            x: row.pos_x,
+            y: row.pos_y,
+          };
+        } else {
+          inRoom.push({ id: row.id, reward, x: row.pos_x, y: row.pos_y });
+        }
+      }
+      setPlaced(inRoom);
+      setWorn(wearing);
       const p = planLevel(kid.current_level, progressRef.current);
 
       setChild(kid);
@@ -327,22 +355,61 @@ export default function PlayPage() {
     playHost(child.host!, 'choose-reward');
   }
 
-  async function claimReward(rewardKey: string) {
+  /**
+   * She has carried a present into the room and let go. Save it where it
+   * landed, let the host say something nice, and give her a moment to
+   * see it before the next round starts.
+   */
+  async function claimReward(rewardKey: string, spot: Spot) {
     if (!child || !plan) return;
 
     const reward = rewardByKey(rewardKey);
     if (!reward) return;
 
     setEarned(new Set(earned).add(rewardKey));
-
-    await supabase.from('child_rewards').insert({
-      child_id: child.id,
-      reward_key: rewardKey,
-      tier: tierForLevel(reward.from),
-      earned_level: child.current_level - 1,
-    });
-
     playHost(child.host!, 'reward-placed');
+
+    // A pet wears one collar at a time. The old one goes back to the
+    // tray in her room, ready to be put somewhere else.
+    if (spot.onPet && worn) {
+      await supabase
+        .from('child_rewards')
+        .update({ on_pet: false, is_placed: false, pos_x: null, pos_y: null })
+        .eq('id', worn.id);
+    }
+
+    const { data } = await supabase
+      .from('child_rewards')
+      .insert({
+        child_id: child.id,
+        reward_key: rewardKey,
+        tier: tierForLevel(reward.from),
+        earned_level: child.current_level - 1,
+        is_placed: true,
+        on_pet: spot.onPet,
+        pos_x: Math.round(spot.x * 100) / 100,
+        pos_y: Math.round(spot.y * 100) / 100,
+        z_index: Math.round(spot.y),
+      })
+      .select('id')
+      .single();
+
+    const id = data?.id ?? rewardKey;
+
+    if (spot.onPet && isCollar(reward)) {
+      setWorn({
+        id,
+        image: reward.image,
+        label: reward.label,
+        x: spot.x,
+        y: spot.y,
+      });
+    } else {
+      setPlaced([...placed, { id, reward, x: spot.x, y: spot.y }]);
+    }
+
+    // Let her admire it, then back to the words.
+    await new Promise((r) => setTimeout(r, 2400));
     startRound(plan, child);
   }
 
@@ -475,13 +542,14 @@ export default function PlayPage() {
             )}
           </div>
 
-          {/* The pet watches from the side while she plays */}
+          {/* The pet watches from the side while she plays, collar on */}
           {petByKey(child.pet_key) && (
-            <div className="pointer-events-none absolute bottom-[6%] right-[1%] z-20 h-[30%] w-[18%]">
-              <PetSprite
+            <div className="pointer-events-none absolute bottom-[6%] right-[1%] z-20 w-[18%]">
+              <PetWithCollar
                 pet={petByKey(child.pet_key)!}
+                collar={worn}
                 sizes="20vw"
-                className="h-full w-full"
+                className="w-full"
               />
               {child.pet_name && (
                 <p className="font-game mt-1 text-center text-2xl text-white drop-shadow-lg">
@@ -673,7 +741,9 @@ export default function PlayPage() {
           pet={petByKey(child.pet_key)}
           petName={child.pet_name}
           rewards={offer}
-          onChoose={claimReward}
+          placed={placed}
+          worn={worn}
+          onPlace={claimReward}
         />
       )}
 

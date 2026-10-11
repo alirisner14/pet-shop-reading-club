@@ -217,3 +217,10 @@ button {
   font-family: var(--font-game), system-ui, sans-serif;
   letter-spacing: 3.5px;
 }
+
+/* A big arrow that bounces upward — "drag it up there". */
+@keyframes point-up {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-22px); }
+}
+.animate-point-up { animation: point-up 0.9s ease-in-out infinite; }

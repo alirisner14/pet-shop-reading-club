@@ -7,11 +7,13 @@ import Image from 'next/image';
 import { createClient } from '@/lib/supabase/client';
 import Loading from '@/components/ui/Loading';
 import { petByKey } from '@/data/pets';
-import PetSprite from '@/components/game/PetSprite';
+import PetWithCollar from '@/components/game/PetWithCollar';
 import {
   rewardByKey,
-  placementOf,
+  isCollar,
   sizeOf,
+  snapPosition,
+  PET_ROOM_WIDTH,
   type Reward,
 } from '@/data/rewards';
 import type { Child, ChildReward } from '@/types';
@@ -26,12 +28,6 @@ import type { Child, ChildReward } from '@/types';
 // Positions are stored as percentages, so the room looks the same on a
 // laptop and a tablet.
 
-// Where things settle, as a percentage down the screen.
-const FLOOR_MIN = 62;
-const FLOOR_MAX = 88;
-const CEILING_MIN = 3;
-const CEILING_MAX = 20;
-
 type Placed = {
   id: string;
   reward: Reward;
@@ -44,10 +40,13 @@ export default function RoomPage() {
   const supabase = createClient();
 
   const roomRef = useRef<HTMLDivElement>(null);
+  const petRef = useRef<HTMLDivElement>(null);
 
   const [child, setChild] = useState<Child | null>(null);
   const [placed, setPlaced] = useState<Placed[]>([]);
   const [tray, setTray] = useState<{ id: string; reward: Reward }[]>([]);
+  // The collar the pet is wearing. x / y are percent of the PET, not the room.
+  const [worn, setWorn] = useState<Placed | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const loaded = useRef(false);
@@ -79,6 +78,7 @@ export default function RoomPage() {
       const rows = (prizes ?? []) as ChildReward[];
 
       const out: Placed[] = [];
+      let wearing: Placed | null = null;
       const waiting: { id: string; reward: Reward }[] = [];
 
       for (const row of rows) {
@@ -86,6 +86,10 @@ export default function RoomPage() {
         if (!reward) continue;
 
         if (row.is_placed && row.pos_x !== null && row.pos_y !== null) {
+          if (row.on_pet) {
+            wearing = { id: row.id, reward, x: row.pos_x, y: row.pos_y };
+            continue;
+          }
           out.push({ id: row.id, reward, x: row.pos_x, y: row.pos_y });
         } else {
           waiting.push({ id: row.id, reward });
@@ -94,6 +98,7 @@ export default function RoomPage() {
 
       setChild(kid);
       setPlaced(out);
+      setWorn(wearing);
       setTray(waiting);
       setLoading(false);
     }
@@ -101,26 +106,10 @@ export default function RoomPage() {
     load();
   }, [router, supabase]);
 
-  // ---------------------------------------------------------
-  // Snapping
-  // ---------------------------------------------------------
-  const snap = useCallback((reward: Reward, x: number, y: number) => {
-    const where = placementOf(reward);
-
-    // Keep everything on screen.
-    let nx = Math.max(4, Math.min(96, x));
-    let ny = y;
-
-    if (where === 'floor') {
-      ny = Math.max(FLOOR_MIN, Math.min(FLOOR_MAX, y));
-    } else if (where === 'hanging') {
-      ny = Math.max(CEILING_MIN, Math.min(CEILING_MAX, y));
-    } else {
-      ny = Math.max(4, Math.min(94, y)); // collars go anywhere
-    }
-
-    return { x: nx, y: ny };
-  }, []);
+  const snap = useCallback(
+    (reward: Reward, x: number, y: number) => snapPosition(reward, x, y),
+    []
+  );
 
   // ---------------------------------------------------------
   // Dragging
@@ -152,6 +141,25 @@ export default function RoomPage() {
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
   }
 
+  /**
+   * Picking the collar up off the pet. It becomes an ordinary item in
+   * the room while she holds it; letting go over the pet puts it back.
+   */
+  function startWornDrag(e: React.PointerEvent) {
+    if (!worn || !petRef.current) return;
+
+    const pet = petRef.current.getBoundingClientRect();
+    const room = roomRef.current!.getBoundingClientRect();
+
+    const x = ((pet.left + (worn.x / 100) * pet.width - room.left) / room.width) * 100;
+    const y = ((pet.top + (worn.y / 100) * pet.height - room.top) / room.height) * 100;
+
+    setPlaced([...placed, { ...worn, x, y }]);
+    setWorn(null);
+    setDragging(worn.id);
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  }
+
   function moveDrag(e: React.PointerEvent) {
     if (!dragging) return;
     const { x, y } = pointToPercent(e);
@@ -163,12 +171,53 @@ export default function RoomPage() {
     );
   }
 
-  async function endDrag() {
+  async function endDrag(e: React.PointerEvent) {
     if (!dragging) return;
 
     const item = placed.find((p) => p.id === dragging);
     setDragging(null);
     if (!item) return;
+
+    // A collar let go over the pet goes on the pet.
+    const box = petRef.current?.getBoundingClientRect();
+    const overPet =
+      isCollar(item.reward) &&
+      box &&
+      e.clientX >= box.left &&
+      e.clientX <= box.right &&
+      e.clientY >= box.top &&
+      e.clientY <= box.bottom;
+
+    if (overPet && box) {
+      const rel = {
+        x: Math.max(0, Math.min(100, ((e.clientX - box.left) / box.width) * 100)),
+        y: Math.max(0, Math.min(100, ((e.clientY - box.top) / box.height) * 100)),
+      };
+
+      // One collar at a time: whatever was on goes back to the tray.
+      if (worn) {
+        setTray((t) => [...t, { id: worn.id, reward: worn.reward }]);
+        await supabase
+          .from('child_rewards')
+          .update({ on_pet: false, is_placed: false, pos_x: null, pos_y: null })
+          .eq('id', worn.id);
+      }
+
+      setPlaced((items) => items.filter((p) => p.id !== item.id));
+      setWorn({ id: item.id, reward: item.reward, ...rel });
+
+      await supabase
+        .from('child_rewards')
+        .update({
+          on_pet: true,
+          is_placed: true,
+          pos_x: Math.round(rel.x * 100) / 100,
+          pos_y: Math.round(rel.y * 100) / 100,
+          z_index: 0,
+        })
+        .eq('id', item.id);
+      return;
+    }
 
     const pos = snap(item.reward, item.x, item.y);
 
@@ -179,6 +228,7 @@ export default function RoomPage() {
     await supabase
       .from('child_rewards')
       .update({
+        on_pet: false,
         is_placed: true,
         pos_x: pos.x,
         pos_y: pos.y,
@@ -258,17 +308,29 @@ export default function RoomPage() {
             style={{
               left: '50%',
               top: '74%',
-              width: '26%',
+              width: `${PET_ROOM_WIDTH}%`,
               transform: 'translate(-50%, -50%)',
               zIndex: 74,
               filter: 'drop-shadow(0 12px 14px rgba(0,0,0,0.3))',
             }}
           >
-            <PetSprite
+            <PetWithCollar
+              ref={petRef}
               pet={pet}
               priority
               sizes="30vw"
-              className="aspect-square w-full"
+              className="w-full"
+              collar={
+                worn
+                  ? {
+                      image: worn.reward.image,
+                      label: worn.reward.label,
+                      x: worn.x,
+                      y: worn.y,
+                    }
+                  : null
+              }
+              onCollarPointerDown={startWornDrag}
             />
           </div>
         )}
@@ -312,7 +374,7 @@ export default function RoomPage() {
       )}
 
       {/* Nothing earned yet */}
-      {placed.length === 0 && tray.length === 0 && (
+      {placed.length === 0 && tray.length === 0 && !worn && (
         <p className="font-game absolute inset-x-0 top-8 z-[65] text-center text-3xl text-white drop-shadow-lg">
           Finish a level to earn something for your room!
         </p>
