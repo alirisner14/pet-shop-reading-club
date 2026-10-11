@@ -34,9 +34,9 @@ export const HOST_LINES: Record<string, string> = {
   'game-missing-letter':
     'Uh oh! This word is missing a letter. Tap the letter that finishes it.',
   'game-snail-talk':
-    "This little one is hungry! I'll say what it wants very slowly. Listen to the sounds, put them together, then tap the right treat.",
+    "Listen! I'll say a word very, very slowly, one sound at a time. Put the sounds together, then tap the word you hear.",
   'game-accessory-train':
-    "Let's break this word into its sounds. Drag each letter into its own bed.",
+    "Let's break this word into its sounds. Drag each sound into its very own bed, in order.",
 
   // Correct
   'correct-1': 'Yes!',

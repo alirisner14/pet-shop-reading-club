@@ -5,11 +5,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { createClient } from '@/lib/supabase/client';
-import MatchWords from '@/components/minigames/MatchWords';
+import GameStage from '@/components/game/GameStage';
 import MatchWordsDemo from '@/components/minigames/MatchWordsDemo';
-import MatchSpokenWord, {
-  type Question,
-} from '@/components/minigames/MatchSpokenWord';
 import RewardMeter from '@/components/game/RewardMeter';
 import Confetti from '@/components/game/Confetti';
 import HostIntro, { WELCOME_STEPS, gameStep } from '@/components/host/HostIntro';
@@ -31,18 +28,15 @@ import {
 import {
   planLevel,
   levelStatus,
-  nextWord,
-  distractorWords,
-  confusableWords,
-  pairsPerRound,
   MASTERY_TARGET,
   unlockedGames,
+  newlyUnlocked,
   type LevelPlan,
 } from '@/lib/progression';
+import { buildRound, type Round } from '@/lib/rounds';
 import { MAX_LEVEL, wordsUpToLevel } from '@/data/words';
 import { playHost } from '@/lib/audio';
 import type { Child, ChildWord, MiniGame } from '@/types';
-import type { Word } from '@/data/words';
 
 type Phase =
   | 'welcome'
@@ -57,7 +51,6 @@ type Phase =
 
 const METER_CUE_STEP = 2;
 const REACTION_EVERY = 3;
-const QUESTIONS_PER_ROUND = 3;
 
 // Which host clip explains each game.
 const INTRO_CLIP: Record<MiniGame, string> = {
@@ -77,11 +70,7 @@ export default function PlayPage() {
   const [plan, setPlan] = useState<LevelPlan | null>(null);
   const [game, setGame] = useState<MiniGame>('match_words');
 
-  // Match the Words
-  const [round, setRound] = useState<Word[]>([]);
-  const [extras, setExtras] = useState<Word[]>([]);
-  // Match to Spoken Word
-  const [questions, setQuestions] = useState<Question[]>([]);
+  const [round, setRound] = useState<Round | null>(null);
 
   const [correctCount, setCorrectCount] = useState(0);
   const [streak, setStreak] = useState(0);
@@ -99,67 +88,37 @@ export default function PlayPage() {
   const gameIndex = useRef(0);
 
   // ---------------------------------------------------------
-  // Building a round
+  // Starting a round
   // ---------------------------------------------------------
 
-  /** Match the Words: N pairs plus one lookalike that matches nothing. */
-  const buildMatchWords = useCallback((p: LevelPlan) => {
-    const chosen: Word[] = [];
-    const used = new Set<string>();
+  /**
+   * Picks the next game and lays out its round.
+   *
+   * Games rotate rather than being chosen at random, so every unlocked
+   * game comes round in turn and none is left unplayed. If a game has
+   * nothing it can use yet — Match to Picture before any picture words
+   * are unlocked — it's skipped rather than shown empty.
+   */
+  const startRound = useCallback((p: LevelPlan, kid: Child) => {
+    const games = unlockedGames(p.level);
 
-    for (let i = 0; i < pairsPerRound(p.level); i++) {
-      const w = nextWord(p, 'match_words', progressRef.current, used);
-      if (!w) break;
-      used.add(w.word);
-      chosen.push(w);
-    }
-
-    setRound(chosen);
-    setExtras(distractorWords(p, used, 1));
-  }, []);
-
-  /** Match to Spoken Word: a few questions, each with lookalike choices. */
-  const buildSpokenWord = useCallback((p: LevelPlan) => {
-    const pool = wordsUpToLevel(p.level);
-    const qs: Question[] = [];
-    const used = new Set<string>();
-
-    for (let i = 0; i < QUESTIONS_PER_ROUND; i++) {
-      const target = nextWord(p, 'match_spoken_word', progressRef.current, used);
-      if (!target) break;
-      used.add(target.word);
-
-      // Lookalikes, but not the very closest ones. Telling "red" from
-      // "bed" by ear alone is a different (and much harder) task than
-      // telling them apart on the page, and it was tipping into unfair.
-      const choices = confusableWords(target.word, pool, 6).slice(2, 5);
-      qs.push({ target, choices });
-    }
-
-    setQuestions(qs);
-  }, []);
-
-  /** Picks the next game and lays out its round. */
-  const startRound = useCallback(
-    (p: LevelPlan, kid: Child) => {
-      const games = unlockedGames(p.level);
+    for (let attempt = 0; attempt < games.length; attempt++) {
       const next = games[gameIndex.current % games.length];
       gameIndex.current += 1;
 
+      const built = buildRound(p, next, progressRef.current);
+      if (!built) continue;
+
       setGame(next);
+      setRound(built);
+      setPhase(kid.seen_intros.includes(next) ? 'playing' : 'game-intro');
+      return;
+    }
 
-      if (next === 'match_spoken_word') buildSpokenWord(p);
-      else buildMatchWords(p);
-
-      // Explain it the first time she meets it.
-      if (!kid.seen_intros.includes(next)) {
-        setPhase('game-intro');
-      } else {
-        setPhase('playing');
-      }
-    },
-    [buildMatchWords, buildSpokenWord]
-  );
+    // Nothing playable at all — shouldn't happen, but don't hang.
+    setRound(null);
+    setPhase('playing');
+  }, []);
 
   // ---------------------------------------------------------
   // Load
@@ -188,7 +147,9 @@ export default function PlayPage() {
       }
 
       progressRef.current = words ?? [];
-      setEarned(new Set((prizes ?? []).map((r) => r.reward_key)));
+      setEarned(
+        new Set((prizes ?? []).map((r: { reward_key: string }) => r.reward_key))
+      );
       const p = planLevel(kid.current_level, progressRef.current);
 
       setChild(kid);
@@ -196,8 +157,8 @@ export default function PlayPage() {
 
       if (!kid.seen_intros.includes('welcome')) {
         // Lay out a round behind the welcome, but don't show it yet.
-        buildMatchWords(p);
         setGame('match_words');
+        setRound(buildRound(p, 'match_words', progressRef.current));
         setPhase('welcome');
       } else {
         setMeterVisible(true);
@@ -208,7 +169,7 @@ export default function PlayPage() {
     }
 
     load();
-  }, [router, supabase, buildMatchWords, startRound]);
+  }, [router, supabase, startRound]);
 
   useEffect(() => {
     if (!reaction) return;
@@ -496,20 +457,12 @@ export default function PlayPage() {
           <div className="pointer-events-none absolute inset-x-[7%] inset-y-[7%] z-0 rounded-[2.5rem] border-[6px] border-white bg-white/30 shadow-2xl backdrop-blur-[3px]" />
 
           <div className="absolute inset-x-[7%] inset-y-[7%] z-10">
-            {game === 'match_spoken_word' ? (
-              questions.length > 0 ? (
-                <MatchSpokenWord
-                  questions={questions}
-                  host={child.host}
-                  onAnswer={handleAnswer}
-                  onRoundDone={handleRoundDone}
-                />
-              ) : null
-            ) : round.length > 0 ? (
-              <MatchWords
-                words={round}
-                distractors={extras}
+            {round ? (
+              <GameStage
+                round={round}
                 host={child.host}
+                pet={petByKey(child.pet_key)}
+                petName={child.pet_name}
                 onAnswer={handleAnswer}
                 onRoundDone={handleRoundDone}
               />
@@ -615,6 +568,14 @@ export default function PlayPage() {
             <p className="font-game mt-4 text-4xl text-white drop-shadow-lg">
               On to level {child.current_level}
             </p>
+
+            {/* A new game opening up is worth announcing — it's the
+                thing most likely to pull her into the next level. */}
+            {newlyUnlocked(child.current_level) && (
+              <p className="font-game animate-pop-in mt-3 text-3xl text-sunshine drop-shadow-lg">
+                A new game is unlocked!
+              </p>
+            )}
           </div>
 
           {/* Centre stage for the celebration */}
